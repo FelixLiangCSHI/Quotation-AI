@@ -16,10 +16,14 @@ from typing import Protocol, runtime_checkable
 from app.ingestion.config import IngestionConfig, load_ingestion_config
 
 
-def file_hash(payload: bytes) -> str:
-    """Stable content hash used for idempotent imports."""
+def file_hash(workbook_bytes: bytes) -> str:
+    """Content digest of a spreadsheet file, used for idempotent imports.
 
-    return hashlib.sha256(payload).hexdigest()
+    This identifies a workbook; it never hashes credentials, so a fast digest
+    rather than a password-hardening KDF is the correct choice here.
+    """
+
+    return hashlib.sha256(workbook_bytes).hexdigest()
 
 
 class WorkbookStorageError(RuntimeError):

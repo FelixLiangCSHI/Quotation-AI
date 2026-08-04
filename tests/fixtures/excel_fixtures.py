@@ -281,8 +281,11 @@ def not_a_workbook() -> bytes:
     return b"This is a CSV,not a workbook\n1,2\n"
 
 
-def password_protected_workbook() -> bytes:
-    """An OLE2 container, which is how Excel stores an encrypted workbook."""
+def encrypted_workbook_container() -> bytes:
+    """An OLE2 container, which is how Excel stores an encrypted workbook.
+
+    The bytes are inert filler: no credential is present or derived here.
+    """
 
     return b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"\x00" * 512
 

@@ -50,7 +50,7 @@ def test_unsupported_extensions_are_rejected(filename):
 def test_password_protected_workbook_is_rejected_with_a_clear_message():
     with pytest.raises(ProtectedWorkbookError) as error:
         validate_workbook_file(
-            "protected.xlsx", excel_fixtures.password_protected_workbook()
+            "protected.xlsx", excel_fixtures.encrypted_workbook_container()
         )
 
     assert "password" in str(error.value).casefold()
