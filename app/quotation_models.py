@@ -24,6 +24,57 @@ class WorkflowStage(str, Enum):
     DOCUMENTS_READY = "documents_ready"
 
 
+class LineItemCategory(str, Enum):
+    """Commercial category of a quotation line item."""
+
+    MAIN_PRODUCT = "main_product"
+    ACCESSORY = "accessory"
+    INSTALLATION = "installation"
+    WARRANTY = "warranty"
+    SERVICE = "service"
+    COMMERCIAL_ADDITION = "commercial_addition"
+
+
+class RecommendationStatus(str, Enum):
+    """How a recommended item relates to the current configuration."""
+
+    REQUIRED = "required"
+    RECOMMENDED = "recommended"
+    OPTIONAL = "optional"
+    INCOMPATIBLE = "incompatible"
+    NOT_EVALUATED = "not_evaluated"
+
+
+@dataclass
+class QuotationLineItem:
+    """One priced or priceable line on a quotation.
+
+    A single-product quotation is simply a one-element collection, so existing
+    single-item behaviour is preserved.
+    """
+
+    line_id: str
+    product_id: str = ""
+    description: str = ""
+    category: LineItemCategory = LineItemCategory.MAIN_PRODUCT
+    quantity: int = 1
+    unit_price: float | None = None
+    is_optional: bool = False
+    source: str = "manual"
+    notes: str = ""
+
+    def __post_init__(self) -> None:
+        self.category = LineItemCategory(self.category)
+        if self.quantity < 1:
+            raise ValueError("Line item quantity must be at least 1.")
+
+    @property
+    def extended_price(self) -> float | None:
+        if self.unit_price is None:
+            return None
+        return self.unit_price * self.quantity
+
+
 class ApprovalStatus(str, Enum):
     NOT_READY = "not_ready"
     PENDING_REVIEW = "pending_review"
@@ -48,6 +99,13 @@ class QuotationDraft:
     requested_delivery_date: date | None = None
     target_price: float | None = None
     proposed_unit_price: float | None = None
+    intended_use: str = ""
+    budget_notes: str = ""
+    requested_accessories: list[str] = field(default_factory=list)
+    requested_services: list[str] = field(default_factory=list)
+    constraints: list[str] = field(default_factory=list)
+    line_items: list[QuotationLineItem] = field(default_factory=list)
+    pending_confirmations: list[dict[str, Any]] = field(default_factory=list)
     notes: str = ""
     missing_fields: list[str] = field(default_factory=list)
     status: WorkflowStage = WorkflowStage.DRAFT

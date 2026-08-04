@@ -5,20 +5,27 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from app.agents import Agent1RequirementAgent, RequirementRequest
 from app.config import REQUIRED_QUOTATION_FIELDS
 from app.natural_language import QuoteRequest, parse_quote_request
 from app.quotation_models import QuotationDraft, WorkflowStage, utc_now
 from app.recommender import QuoteRecommendation, QuoteRecommender
+from app.requirement_fields import (
+    AGENT_EXTRACTABLE_FIELDS,
+    REQUIREMENT_FIELD_SPECS,
+    field_question,
+)
+from app.requirement_intake import (
+    PendingConfirmation,
+    RejectedCandidate,
+    RequirementCandidate,
+    candidates_from_mapping,
+    merge_candidates,
+)
 
 
 FIELD_QUESTIONS = {
-    "customer_name": "What is the customer name?",
-    "region": "Which sales region is this quotation for?",
-    "product_query": "What product or system should I configure?",
-    "quantity": "What quantity is required?",
-    "currency": "Which currency should the quotation use?",
-    "incoterm": "Which Incoterm applies (EXW, FCA, FOB, CIF, DAP, or DDP)?",
-    "delivery_location": "What is the delivery location?",
+    name: spec.question for name, spec in REQUIREMENT_FIELD_SPECS.items()
 }
 
 CORRECTION_RE = re.compile(
@@ -65,6 +72,9 @@ class ConversationTurnResult:
     notices: tuple[str, ...]
     ready_for_analysis: bool
     product_recommendation: QuoteRecommendation | None = None
+    rejected_candidates: tuple[RejectedCandidate, ...] = ()
+    pending_confirmations: tuple[PendingConfirmation, ...] = ()
+    agent_fallback_used: bool = True
 
 
 class RequirementConversationAgent:
@@ -72,8 +82,10 @@ class RequirementConversationAgent:
         self,
         recommender: QuoteRecommender | None = None,
         required_fields: Iterable[str] = REQUIRED_QUOTATION_FIELDS,
+        requirement_agent: Agent1RequirementAgent | None = None,
     ) -> None:
         self.recommender = recommender or QuoteRecommender()
+        self.requirement_agent = requirement_agent
         self.required_fields = tuple(required_fields)
         unsupported_fields = set(self.required_fields).difference(FIELD_QUESTIONS)
         if unsupported_fields:
@@ -100,8 +112,24 @@ class RequirementConversationAgent:
 
         changed_fields: list[str] = []
         notices: list[str] = []
+        rejected: list[RejectedCandidate] = []
         has_correction_marker = bool(CORRECTION_RE.search(normalized_message))
-        for field_name, value in extracted_fields.items():
+        correction_fields: list[str] = []
+        for field_name, value in list(extracted_fields.items()):
+            try:
+                value = REQUIREMENT_FIELD_SPECS[field_name].validate(value)
+            except Exception as error:  # noqa: BLE001 - never corrupt the draft
+                rejected.append(
+                    RejectedCandidate(
+                        field_name=field_name,
+                        value=value,
+                        reason=str(error),
+                        source="deterministic",
+                    )
+                )
+                extracted_fields.pop(field_name, None)
+                continue
+            extracted_fields[field_name] = value
             current_value = getattr(updated_draft, field_name)
             is_field_correction = self._is_field_correction(
                 field_name,
@@ -109,6 +137,8 @@ class RequirementConversationAgent:
                 extracted_fields,
                 has_correction_marker,
             )
+            if is_field_correction:
+                correction_fields.append(field_name)
             if field_name == "selected_product_ids":
                 can_replace = not current_value or is_field_correction
             else:
@@ -141,10 +171,36 @@ class RequirementConversationAgent:
                 "The product selection was cleared because the product request or region changed."
             )
 
+        agent_outcome = self._run_requirement_agent(
+            normalized_message,
+            updated_draft,
+        )
+        pending: tuple[PendingConfirmation, ...] = ()
+        agent_fallback_used = True
+        if agent_outcome is not None:
+            agent_fallback_used = agent_outcome.fallback_used
+            agent_candidates = self._agent_candidates(
+                agent_outcome.value,
+                skip_fields=set(extracted_fields),
+            )
+            merge = merge_candidates(
+                updated_draft,
+                agent_candidates,
+                correction_fields=correction_fields,
+            )
+            updated_draft = merge.draft
+            changed_fields.extend(merge.changed_fields)
+            rejected.extend(merge.rejected)
+            pending = merge.pending
+            notices.extend(merge.notices)
+
         missing_fields = self._calculate_missing_fields(
             updated_draft,
             previous_missing=current_draft.missing_fields,
-            extracted_fields=extracted_fields,
+            extracted_fields={
+                **extracted_fields,
+                **{name: True for name in changed_fields},
+            },
         )
         updated_draft.missing_fields = list(missing_fields)
         updated_draft.updated_at = utc_now()
@@ -159,6 +215,8 @@ class RequirementConversationAgent:
         else:
             updated_draft.status = WorkflowStage.COLLECTING_REQUIREMENTS
             next_question = self._next_question(missing_fields, recommendation)
+        if pending:
+            next_question = pending[0].question
 
         return ConversationTurnResult(
             updated_draft=updated_draft,
@@ -169,7 +227,108 @@ class RequirementConversationAgent:
             notices=tuple(notices),
             ready_for_analysis=ready_for_analysis,
             product_recommendation=recommendation,
+            rejected_candidates=tuple(rejected),
+            pending_confirmations=pending,
+            agent_fallback_used=agent_fallback_used,
         )
+
+    def _run_requirement_agent(
+        self,
+        message: str,
+        draft: QuotationDraft,
+    ):
+        """Call Agent 1 when configured. Agent 1 is always optional."""
+
+        if self.requirement_agent is None:
+            return None
+        known_fields = {
+            name: str(getattr(draft, name))
+            for name in AGENT_EXTRACTABLE_FIELDS
+            if not _is_empty(getattr(draft, name, None))
+        }
+        request = RequirementRequest(
+            customer_request=message,
+            known_fields=known_fields,
+            missing_fields=tuple(draft.missing_fields),
+            candidate_products=tuple(draft.selected_product_ids),
+        )
+        try:
+            return self.requirement_agent.run(request)
+        except Exception:  # noqa: BLE001 - Agent 1 must never block the flow
+            return None
+
+    @staticmethod
+    def _agent_candidates(
+        response,
+        *,
+        skip_fields: set[str],
+    ) -> tuple[RequirementCandidate, ...]:
+        """Convert an Agent 1 response into validated candidate values.
+
+        Fields outside :data:`AGENT_EXTRACTABLE_FIELDS` are dropped here, so
+        the provider cannot propose a price, a rule outcome or an approval.
+        """
+
+        candidates: list[RequirementCandidate] = []
+        for item in getattr(response, "requirements", ()):  # pragma: no branch
+            field_name = str(item.field_name).strip()
+            if field_name not in AGENT_EXTRACTABLE_FIELDS:
+                continue
+            if field_name in skip_fields:
+                continue
+            candidates.append(
+                RequirementCandidate(
+                    field_name=field_name,
+                    value=item.value,
+                    confidence=item.confidence,
+                    source="agent1",
+                )
+            )
+        return tuple(candidates)
+
+    def apply_structured_form(
+        self,
+        draft: QuotationDraft,
+        values: dict[str, Any],
+    ):
+        """Apply a structured form submission to the same domain model.
+
+        Form entries are explicit user input, so they replace existing values
+        and are never parked for confirmation. They still pass through the
+        same validation and merge logic as conversational input.
+        """
+
+        outcome = merge_candidates(
+            draft,
+            candidates_from_mapping(values, confidence=1.0, source="form"),
+            force_replace=True,
+        )
+        updated_draft = outcome.draft
+        if (
+            {"product_query", "region"}.intersection(outcome.changed_fields)
+            and updated_draft.selected_product_ids
+            and "selected_product_ids" not in outcome.applied
+        ):
+            updated_draft.selected_product_ids = []
+            outcome.changed_fields = (
+                *outcome.changed_fields,
+                "selected_product_ids",
+            )
+        updated_draft.missing_fields = list(
+            self._calculate_missing_fields(
+                updated_draft,
+                previous_missing=[],
+                extracted_fields=outcome.applied,
+            )
+        )
+        updated_draft.status = (
+            WorkflowStage.READY_FOR_ANALYSIS
+            if not updated_draft.missing_fields
+            and updated_draft.selected_product_ids
+            else WorkflowStage.COLLECTING_REQUIREMENTS
+        )
+        updated_draft.updated_at = utc_now()
+        return outcome
 
     @staticmethod
     def _is_field_correction(
@@ -310,7 +469,7 @@ class RequirementConversationAgent:
         recommendation: QuoteRecommendation | None,
     ) -> str | None:
         if missing_fields:
-            return FIELD_QUESTIONS[missing_fields[0]]
+            return field_question(missing_fields[0])
         if recommendation and recommendation.main_model:
             return "Please select a recommended product before pricing analysis."
         return "Please provide enough product detail for a catalog recommendation."

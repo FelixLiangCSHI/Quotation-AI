@@ -12,8 +12,10 @@ transaction as the state change that produced it.
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -23,19 +25,59 @@ from app.approval_workflow import (
     prepare_approval,
     submit_approval_action,
 )
-from app.domain.dto import LineItemDTO, QuotationDTO, QuotationSummaryDTO
+from app.domain.dto import (
+    LineItemDTO,
+    LineItemType,
+    QuotationDTO,
+    QuotationSummaryDTO,
+)
 from app.domain.workflow_state_codec import (
     dump_workflow_state,
     load_workflow_state,
 )
 from app.quotation_models import (
     ApprovalStatus,
+    LineItemCategory,
     QuotationWorkflowState,
+    WorkflowStage,
     utc_now,
 )
 from app.repositories.interfaces import QuotationNotFoundError
 from app.services.unit_of_work import UnitOfWork
 from app.workflow_state import generate_quotation_id, initialize_workflow_state
+from app.workflow_validation import invalidate_validation_outputs
+
+
+#: Domain line-item categories mapped onto the persisted line item types.
+LINE_ITEM_TYPE_BY_CATEGORY = {
+    LineItemCategory.MAIN_PRODUCT: LineItemType.MAIN_PRODUCT,
+    LineItemCategory.ACCESSORY: LineItemType.ACCESSORY,
+    LineItemCategory.INSTALLATION: LineItemType.INSTALLATION,
+    LineItemCategory.WARRANTY: LineItemType.WARRANTY,
+    LineItemCategory.SERVICE: LineItemType.SERVICE,
+    LineItemCategory.COMMERCIAL_ADDITION: LineItemType.COMMERCIAL_ADDITION,
+}
+
+
+def line_item_dtos(draft) -> tuple[LineItemDTO, ...]:
+    """Project the draft's line items onto persistable DTOs."""
+
+    return tuple(
+        LineItemDTO(
+            position=position,
+            item_type=LINE_ITEM_TYPE_BY_CATEGORY[item.category],
+            product_id=item.product_id,
+            customer_description=item.description,
+            internal_description=item.notes,
+            quantity=item.quantity,
+            currency=draft.currency,
+            proposed_unit_price=(
+                None if item.unit_price is None else Decimal(str(item.unit_price))
+            ),
+            is_optional=item.is_optional,
+        )
+        for position, item in enumerate(draft.line_items)
+    )
 
 
 class QuotationServiceError(RuntimeError):
@@ -262,6 +304,154 @@ class QuotationService:
 
         assert record is not None
         return LoadedQuotation(record=record, state=loaded.state)
+
+    def save_draft(
+        self,
+        state: QuotationWorkflowState,
+        *,
+        actor: str = "user",
+        owner_user_id: int | None = None,
+    ) -> LoadedQuotation:
+        """Save a draft, creating it on first save and updating afterwards.
+
+        This is the save half of draft save and resume. ``resume_draft``
+        reloads the same quotation and rebuilds the deterministic state.
+        """
+
+        quotation_id = state.draft.quotation_id
+        try:
+            existing = self.load_quotation(quotation_id)
+        except QuotationNotFoundError:
+            created = self.create_quotation(
+                quotation_id=quotation_id,
+                owner_user_id=owner_user_id,
+                actor=actor,
+                state=state,
+            )
+            if state.draft.line_items:
+                created = self.replace_line_items(
+                    created,
+                    line_item_dtos(state.draft),
+                    actor=actor,
+                    actor_user_id=owner_user_id,
+                )
+            return created
+        existing = LoadedQuotation(record=existing.record, state=state)
+        saved = self.save_state(
+            existing,
+            event_type="draft_saved",
+            actor=actor,
+            actor_user_id=owner_user_id,
+        )
+        return self.replace_line_items(
+            saved,
+            line_item_dtos(state.draft),
+            actor=actor,
+            actor_user_id=owner_user_id,
+        )
+
+    def resume_draft(self, quotation_id: str) -> LoadedQuotation:
+        """Reopen a saved draft with its deterministic state restored."""
+
+        return self.load_quotation(quotation_id)
+
+    def duplicate_quotation(
+        self,
+        quotation_id: str,
+        *,
+        new_quotation_id: str | None = None,
+        actor: str = "user",
+        owner_user_id: int | None = None,
+    ) -> LoadedQuotation:
+        """Copy a quotation's requirements and line items into a new draft.
+
+        Only requirement and line-item state is carried over. Pricing,
+        validation, approval and generated documents are deliberately dropped:
+        a copy must be re-priced and re-approved on its own merits.
+        """
+
+        return self._copy_quotation(
+            quotation_id,
+            new_quotation_id=new_quotation_id,
+            actor=actor,
+            owner_user_id=owner_user_id,
+            event_type="quotation_duplicated",
+            keep_audit_trail=False,
+        )
+
+    def clone_as_new_version(
+        self,
+        quotation_id: str,
+        *,
+        new_quotation_id: str | None = None,
+        actor: str = "user",
+        owner_user_id: int | None = None,
+    ) -> LoadedQuotation:
+        """Create a successor version of a quotation.
+
+        Like a duplicate, but the source quotation is recorded so the version
+        lineage stays auditable, and the source audit trail is carried over.
+        """
+
+        return self._copy_quotation(
+            quotation_id,
+            new_quotation_id=new_quotation_id,
+            actor=actor,
+            owner_user_id=owner_user_id,
+            event_type="quotation_cloned_as_new_version",
+            keep_audit_trail=True,
+        )
+
+    def _copy_quotation(
+        self,
+        quotation_id: str,
+        *,
+        new_quotation_id: str | None,
+        actor: str,
+        owner_user_id: int | None,
+        event_type: str,
+        keep_audit_trail: bool,
+    ) -> LoadedQuotation:
+        source = self.load_quotation(quotation_id)
+        target_id = new_quotation_id or generate_quotation_id()
+
+        copied = initialize_workflow_state(quotation_id=target_id)
+        source_draft = source.state.draft
+        copied_draft = deepcopy(source_draft)
+        copied_draft.quotation_id = target_id
+        copied_draft.created_at = copied.draft.created_at
+        copied_draft.updated_at = copied.draft.updated_at
+        copied_draft.status = (
+            WorkflowStage.READY_FOR_ANALYSIS
+            if not copied_draft.missing_fields and copied_draft.selected_product_ids
+            else WorkflowStage.COLLECTING_REQUIREMENTS
+        )
+        copied_draft.proposed_unit_price = None
+        copied.draft = copied_draft
+        copied.current_stage = copied_draft.status
+        if keep_audit_trail:
+            copied.audit_events = [
+                *deepcopy(source.state.audit_events),
+                *copied.audit_events,
+            ]
+
+        # Copies never inherit derived commercial state.
+        invalidate_validation_outputs(copied, clear_pricing=True)
+
+        created = self.create_quotation(
+            quotation_id=target_id,
+            owner_user_id=owner_user_id if owner_user_id is not None
+            else source.record.owner_user_id,
+            actor=actor,
+            state=copied,
+        )
+        return self.save_state(
+            created,
+            event_type=event_type,
+            actor=actor,
+            actor_user_id=owner_user_id,
+            details={"source_quotation_id": quotation_id},
+        )
 
     # -- lifecycle -----------------------------------------------------
 

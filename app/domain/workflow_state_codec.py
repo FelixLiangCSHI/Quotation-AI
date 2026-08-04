@@ -25,6 +25,8 @@ from app.quotation_models import (
     CommercialValidationResult,
     ComparableQuotation,
     EmailOutput,
+    LineItemCategory,
+    QuotationLineItem,
     PricingResult,
     QuotationDraft,
     QuotationWorkflowState,
@@ -134,11 +136,13 @@ def _build(target: type, payload: dict[str, Any]) -> Any:
 _NESTED_TYPES: dict[str, type] = {
     "ComparableQuotation": ComparableQuotation,
     "CommercialRuleResult": CommercialRuleResult,
+    "QuotationLineItem": QuotationLineItem,
 }
 
 _ENUM_TYPES: dict[str, type] = {
     "WorkflowStage": WorkflowStage,
     "ApprovalStatus": ApprovalStatus,
+    "LineItemCategory": LineItemCategory,
 }
 
 
