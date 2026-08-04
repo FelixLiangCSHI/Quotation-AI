@@ -1,0 +1,1 @@
+"""Quotation bot MVP package."""

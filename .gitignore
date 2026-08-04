@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Local IDE/editor files
+.vscode/
+.vs/
+.idea/
+*.code-workspace
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/secrets.*.toml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Generated demo artifacts
+Output Sample/Generated Demo/
+PPT/*.pptx
+
+# Public deployment exclusions: proprietary/local-only source material
+Data/*
+!Data/synthetic/
+!Data/synthetic/**
+Decision Tree/
+Output Sample/
+frontend/
+scripts/
+PPT/
+quotation_snapshot.json
+rules/
+Quotation AI.png
+tests/
+docs/*
+!docs/demo_acceptance_checklist.md
+!docs/streamlit_cloud_deployment.md
+!docs/final_demo_test_report.md
+
+# Temporary files
+*.tmp
+*.temp
+~$*

@@ -1,0 +1,9 @@
+Vertical,LOB,Prod Type,Prod Family,Cat#,Description,List Price,Net Price,Minimum Price,Transfer Price,COGS,Installation COGS,Warranty COGS,Freight,Duty,Tariff,Service Net Price,Service COGS,Service Margin,Service Margin %
+Demo,Imaging,System,FMT,DEMO-FMT-100,Synthetic FMT digital X-ray system,108,100,70,,50,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-FMT-100,Synthetic FMT digital X-ray system,110,102,71,,51,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-FMT-100,Synthetic FMT digital X-ray system,112,104,72,,52,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-FMT-100,Synthetic FMT digital X-ray system,109,101,73,,53,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-FMT-100,Synthetic FMT digital X-ray system,111,103,74,,54,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-FMT-ALT,Synthetic FMT compact room system,95,88,65,,44,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-FMT-ALT,Synthetic FMT compact room system,97,90,66,,45,0,0,0,0,0,,,,
+Demo,Imaging,System,FMT,DEMO-MISSING-900,Synthetic incomplete-data product,80,,60,,,,,,,,,,,,
