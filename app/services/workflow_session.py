@@ -28,6 +28,7 @@ from app.services.session_reference import (
 
 __all__ = [
     "active_quotation_record",
+    "duplicate_active_quotation",
     "ensure_schema",
     "get_active_quotation",
     "open_quotation",
@@ -166,6 +167,29 @@ def start_new_quotation(
         version=loaded.version,
     )
     return loaded
+
+
+def duplicate_active_quotation(
+    session_state: MutableMapping[str, Any],
+    quotation_id: str,
+    service: QuotationService | None = None,
+    *,
+    as_new_version: bool = False,
+) -> LoadedQuotation:
+    """Copy a quotation and make the copy this session's active quotation."""
+
+    resolver = service or QuotationService()
+    copy = (
+        resolver.clone_as_new_version(quotation_id, actor="user")
+        if as_new_version
+        else resolver.duplicate_quotation(quotation_id, actor="user")
+    )
+    set_active_quotation(
+        session_state,
+        quotation_id=copy.quotation_id,
+        version=copy.version,
+    )
+    return copy
 
 
 def open_quotation(

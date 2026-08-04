@@ -13,6 +13,21 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
 - Streamlit chatbot-style prototype.
 - Deterministic multi-turn requirement collection that retains earlier answers
   and supports explicit corrections.
+- Structured requirement form as an alternative to conversational entry. Both
+  entry modes go through the same validation and merge logic, so they update
+  the same quotation domain model.
+- Typed requirement fields with allowed-value checks (`app/requirement_fields.py`)
+  and a deterministic candidate merge layer (`app/requirement_intake.py`).
+  Optional Agent 1 extraction is validated before it can touch a quotation, and
+  low-confidence candidates must be confirmed explicitly.
+- Multi-line quotations (`app/line_items.py`): one or more main products plus
+  accessories, installation, warranty, service and optional commercial lines,
+  with per-line quantity and price editing. Every product line passes a
+  deterministic compatibility check before it can be added, and recommendations
+  are labelled required, recommended, optional, incompatible or not evaluated.
+- Material edits (adding, editing or removing a line item) clear the pricing
+  run, validation run, approval and generated customer documents.
+- Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
 - Main-product recommendation and explicit product selection before analysis.
 - Deterministic rule checks for:
