@@ -10,8 +10,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
-from openpyxl import load_workbook
-from openpyxl.utils.exceptions import InvalidFileException
 
 from app.config import PRICING_DATA_MODE, SAP_BASE_CURRENCY
 
@@ -168,6 +166,16 @@ def _load_pricing_records_cached(
     modified_time_ns: int,
 ) -> tuple[PricingRecord, ...]:
     del modified_time_ns
+    # Imported lazily so the deterministic CSV/synthetic path, and any caller
+    # that never opens a workbook, does not require openpyxl to be installed.
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.utils.exceptions import InvalidFileException
+    except ImportError as error:  # pragma: no cover - depends on environment
+        raise PricingDataError(
+            "Reading an archived SAP pricing workbook requires openpyxl."
+        ) from error
+
     try:
         workbook = load_workbook(resolved_path, read_only=True, data_only=True)
     except (OSError, BadZipFile, InvalidFileException) as error:
