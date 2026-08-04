@@ -46,7 +46,7 @@ Output Sample/
 frontend/
 scripts/
 PPT/
-quotation_snapshot.json
+/quotation_snapshot.json
 rules/
 Quotation AI.png
 tests/

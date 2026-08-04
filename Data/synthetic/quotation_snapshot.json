@@ -1,0 +1,216 @@
+{
+  "metadata": {
+    "snapshot_version": "synthetic-1.0",
+    "source_format": "generated_demo",
+    "notes": [
+      "All identifiers, descriptions, rules, and commercial values are synthetic."
+    ]
+  },
+  "products": [
+    {
+      "product_id": "DEMO-FMT-100",
+      "system_family": "FMT",
+      "category": "system",
+      "short_description": "Synthetic FMT digital X-ray system",
+      "comments": "Synthetic demonstration product",
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-GEN-80",
+      "system_family": "FMT",
+      "category": "generator",
+      "short_description": "CGN-80 synthetic generator",
+      "comments": null,
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-STAND-M",
+      "system_family": "FMT",
+      "category": "tube_stand",
+      "short_description": "Synthetic FMT motorized tube stand",
+      "comments": null,
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-DETECTOR-43",
+      "system_family": "FMT",
+      "category": "detector",
+      "short_description": "Synthetic Focus 43C detector",
+      "comments": null,
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-TUBE-400",
+      "system_family": "FMT",
+      "category": "tube",
+      "short_description": "Synthetic tube w/ E7254 & Ray-15_1/RAD-60",
+      "comments": null,
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-GRID-T",
+      "system_family": "FMT",
+      "category": "grid",
+      "short_description": "Synthetic table grid for Focus 43C",
+      "comments": null,
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-TABLE-1",
+      "system_family": "FMT",
+      "category": "table",
+      "short_description": "Synthetic FMT table",
+      "comments": null,
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-FMT-ALT",
+      "system_family": "FMT",
+      "category": "system",
+      "short_description": "Synthetic FMT compact room system",
+      "comments": "Synthetic alternative",
+      "jicheng_comments": null,
+      "source": {}
+    },
+    {
+      "product_id": "DEMO-MISSING-900",
+      "system_family": "FMT",
+      "category": "system",
+      "short_description": "Synthetic incomplete-data product",
+      "comments": "Used to test missing commercial data",
+      "jicheng_comments": null,
+      "source": {}
+    }
+  ],
+  "step_options": [
+    {
+      "step_id": "fmt_step_1a",
+      "product_id": "DEMO-FMT-100",
+      "option_group": "System",
+      "short_description": "Synthetic FMT digital X-ray system",
+      "raw_constraint_text": null,
+      "source": {}
+    },
+    {
+      "step_id": "fmt_step_2",
+      "product_id": "DEMO-GEN-80",
+      "option_group": "Generator",
+      "short_description": "CGN-80 synthetic generator",
+      "raw_constraint_text": null,
+      "source": {}
+    },
+    {
+      "step_id": "fmt_step_3",
+      "product_id": "DEMO-STAND-M",
+      "option_group": "Tube stand",
+      "short_description": "Synthetic FMT motorized tube stand",
+      "raw_constraint_text": null,
+      "source": {}
+    },
+    {
+      "step_id": "fmt_step_6",
+      "product_id": "DEMO-DETECTOR-43",
+      "option_group": "Detector",
+      "short_description": "Synthetic Focus 43C detector",
+      "raw_constraint_text": null,
+      "source": {}
+    },
+    {
+      "step_id": "fmt_step_8",
+      "product_id": "DEMO-TUBE-400",
+      "option_group": "Tube",
+      "short_description": "Synthetic tube w/ E7254 & Ray-15_1/RAD-60",
+      "raw_constraint_text": null,
+      "source": {}
+    },
+    {
+      "step_id": "fmt_step_10",
+      "product_id": "DEMO-GRID-T",
+      "option_group": "Grid",
+      "short_description": "Synthetic table grid for Focus 43C",
+      "raw_constraint_text": null,
+      "source": {}
+    },
+    {
+      "step_id": "fmt_step_11a",
+      "product_id": "DEMO-TABLE-1",
+      "option_group": "Table",
+      "short_description": "Synthetic FMT table",
+      "raw_constraint_text": null,
+      "source": {}
+    }
+  ],
+  "rule_signals": [],
+  "compatibility_matrix": [
+    {
+      "matrix_name": "Synthetic FMT compatibility",
+      "system_family": "FMT",
+      "acquisition_type": "digital",
+      "tube_stand_id": "DEMO-STAND-M",
+      "tube_stand_name": "Synthetic motorized stand",
+      "wallstand_id": "",
+      "wallstand_name": null,
+      "table_id": "DEMO-TABLE-1",
+      "table_name": "Synthetic table",
+      "status": "supported",
+      "signal_text": "Synthetic supported configuration",
+      "remark": "Demonstration rule only",
+      "source": {}
+    }
+  ],
+  "detector_grid_matrix": [
+    {
+      "grid_id": "DEMO-GRID-T",
+      "grid_description": "Synthetic table grid",
+      "support_kind": "position",
+      "support_name": "Table",
+      "support_value": "Y",
+      "source": {}
+    },
+    {
+      "grid_id": "DEMO-GRID-T",
+      "grid_description": "Synthetic table grid",
+      "support_kind": "detector",
+      "support_name": "Focus 43C",
+      "support_value": "Y",
+      "source": {}
+    }
+  ],
+  "generator_tube_matrix": [
+    {
+      "spec_category": "output_kw_at_100ma",
+      "tube_spec": "w/ E7254 & Ray-15_1/RAD-60",
+      "generator": "CGN-80",
+      "value": "80",
+      "source": {}
+    },
+    {
+      "spec_category": "kvp_range",
+      "tube_spec": "w/ E7254 & Ray-15_1/RAD-60",
+      "generator": "CGN-80",
+      "value": "40-150",
+      "source": {}
+    },
+    {
+      "spec_category": "ma_range",
+      "tube_spec": "w/ E7254 & Ray-15_1/RAD-60",
+      "generator": "CGN-80",
+      "value": "10-1000",
+      "source": {}
+    },
+    {
+      "spec_category": "mas_range",
+      "tube_spec": "w/ E7254 & Ray-15_1/RAD-60",
+      "generator": "CGN-80",
+      "value": "0.1-1000",
+      "source": {}
+    }
+  ]
+}
