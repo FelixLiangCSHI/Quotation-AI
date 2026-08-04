@@ -189,6 +189,16 @@ The Streamlit interface shows the draft summary, missing fields, current stage,
 and safe recommendation choices. It does not render catalog source dictionaries
 or workbook provenance.
 
+### Interface design
+
+The layout follows the `ui-ux-pro-max` design intelligence guidance for
+enterprise SaaS/dashboard products: a Swiss-minimal structure, a trust-blue
+palette (`#2563EB` primary on a `#F8FAFC` surface), and Material symbols instead
+of emoji. The design is expressed entirely through the declarative theme in
+`.streamlit/config.toml` and native Streamlit primitives (bordered containers,
+columns, tabs, metrics, progress). No custom CSS or JavaScript is injected, so
+the app stays compatible with Streamlit Community Cloud.
+
 ## Deterministic Pricing Intelligence
 
 `PRICING_DATA_MODE=synthetic` is the deployment default. The committed

@@ -1,0 +1,12 @@
+# Theme derived with the ui-ux-pro-max design intelligence skill.
+# Product type: SaaS / enterprise dashboard -> Minimalism & Swiss Style.
+# Palette: SaaS (General) trust blue #2563EB on a neutral slate surface.
+# Configured declaratively so no custom CSS or JavaScript is injected and the
+# app stays deployable on Streamlit Community Cloud.
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#F8FAFC"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1E293B"
+font = "sans serif"

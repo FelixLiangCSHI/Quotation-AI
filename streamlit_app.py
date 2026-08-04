@@ -73,52 +73,28 @@ LOGGER = logging.getLogger(__name__)
 
 st.set_page_config(
     page_title="Quotation Bot",
-    page_icon="QB",
+    page_icon=":material/request_quote:",
     layout="wide",
+    initial_sidebar_state="expanded",
+    menu_items={
+        "About": (
+            "Quotation Bot — a deterministic, rule-backed quotation assistant "
+            "running on synthetic demo data."
+        )
+    },
 )
 
 
-CUSTOM_CSS = """
-<style>
-:root {
-    --quote-ink: #18212f;
-    --quote-muted: #5d6878;
-    --quote-line: #d8dee8;
-    --quote-accent: #f07a22;
-    --quote-bg: #f7f8f5;
-}
-.stApp {
-    background:
-        radial-gradient(circle at 16% 14%, rgba(240, 122, 34, 0.12), transparent 28%),
-        linear-gradient(135deg, #fbfaf5 0%, var(--quote-bg) 46%, #edf3f1 100%);
-    color: var(--quote-ink);
-}
-h1, h2, h3, p, li, div, label, span {
-    font-family: "Aptos Display", "Segoe UI Variable Display", "Trebuchet MS", sans-serif;
-}
-[data-testid="stChatMessage"] {
-    border: 1px solid rgba(24, 33, 47, 0.08);
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.78);
-    box-shadow: 0 12px 28px rgba(24, 33, 47, 0.07);
-}
-.status-pill {
-    display: inline-flex;
-    border: 1px solid var(--quote-line);
-    border-radius: 999px;
-    padding: 0.18rem 0.65rem;
-    margin-right: 0.35rem;
-    color: var(--quote-muted);
-    background: rgba(255, 255, 255, 0.72);
-    font-size: 0.88rem;
-}
-.status-pill.active {
-    border-color: var(--quote-accent);
-    color: var(--quote-ink);
-    background: rgba(240, 122, 34, 0.12);
-}
-</style>
-"""
+WORKFLOW_STEPS = (
+    "Start quotation",
+    "Requirements",
+    "Product selection",
+    "Pricing",
+    "Validation",
+    "Human review",
+    "Communication",
+    "Documents and audit",
+)
 
 
 @st.cache_resource
@@ -142,40 +118,49 @@ def main() -> None:
     _initialize_messages()
     _render_sidebar(state)
 
-    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-    st.title("Quotation Bot")
+    st.title(":material/request_quote: Quotation Bot")
     st.caption(
         "One deterministic local workflow from requirements through approved "
         "quotation downloads"
     )
 
     _render_stage_indicator(state)
+    st.divider()
 
-    st.header("A. Conversation")
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+    conversation_column, workspace_column = st.columns([2, 3], gap="large")
 
-    st.header("B. Quotation Draft")
-    _render_main_draft(state.draft)
+    with conversation_column:
+        st.subheader("A. Conversation")
+        with st.container(height=520, border=True):
+            for message in st.session_state.messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
 
-    recommendation = state.product_recommendation
-    if isinstance(recommendation, QuoteRecommendation):
-        st.header("C. Product Recommendation")
-        _render_product_selection(state, recommendation)
-    elif state.draft.product_query:
-        st.warning(
-            "No product recommendation is available yet. Add product details "
-            "in the conversation and try again."
-        )
-    if state.draft.selected_product_ids:
-        _render_quotation_editor(state, recommendation)
-        st.header("D. Pricing Analysis")
-        _render_pricing_analysis(state, recommendation)
-    if state.combined_decision is not None and not state.validation_stale:
-        _render_approval_panel(state)
-    if state.approval.status != ApprovalStatus.NOT_READY:
-        _render_output_stage(state)
+    with workspace_column:
+        st.subheader("B. Quotation draft")
+        with st.container(border=True):
+            _render_main_draft(state.draft)
+
+        recommendation = state.product_recommendation
+        if isinstance(recommendation, QuoteRecommendation):
+            st.subheader("C. Product recommendation")
+            with st.container(border=True):
+                _render_product_selection(state, recommendation)
+        elif state.draft.product_query:
+            st.warning(
+                "No product recommendation is available yet. Add product details "
+                "in the conversation and try again.",
+                icon=":material/search_off:",
+            )
+        if state.draft.selected_product_ids:
+            _render_quotation_editor(state, recommendation)
+            st.subheader("D. Pricing analysis")
+            with st.container(border=True):
+                _render_pricing_analysis(state, recommendation)
+        if state.combined_decision is not None and not state.validation_stale:
+            _render_approval_panel(state)
+        if state.approval.status != ApprovalStatus.NOT_READY:
+            _render_output_stage(state)
     prompt = st.chat_input(
         "Answer the current question or correct a field",
     )
@@ -191,7 +176,10 @@ def main() -> None:
             "Requirement message was rejected (%s).",
             type(error).__name__,
         )
-        st.error(f"I could not use that answer: {error}")
+        st.error(
+            f"I could not use that answer: {error}",
+            icon=":material/error:",
+        )
         return
 
     response_parts = list(result.notices)
@@ -224,8 +212,13 @@ def _welcome_message() -> dict[str, str]:
 
 def _render_sidebar(state: QuotationWorkflowState) -> None:
     with st.sidebar:
-        st.title("Quotation workflow")
-        if st.button("New quotation", type="primary", use_container_width=True):
+        st.header("Quotation workflow")
+        if st.button(
+            "New quotation",
+            type="primary",
+            icon=":material/add:",
+            use_container_width=True,
+        ):
             reset_workflow_state(st.session_state)
             st.session_state.pop(SCENARIO_SESSION_KEY, None)
             st.session_state.messages = [_welcome_message()]
@@ -236,27 +229,29 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
         st.success(
             "DEMO MODE — synthetic local data"
             if DEMO_MODE
-            else "Configured application mode"
+            else "Configured application mode",
+            icon=":material/verified_user:",
         )
         st.caption(f"Pricing data mode: {PRICING_DATA_MODE}")
 
-        st.markdown("#### Workflow progress")
+        st.divider()
         current_step = _current_step(state)
-        for index, label in enumerate(
-            (
-                "Start quotation",
-                "Requirements",
-                "Product selection",
-                "Pricing",
-                "Validation",
-                "Human review",
-                "Communication",
-                "Documents and audit",
-            ),
-            start=1,
-        ):
-            marker = "▶" if index == current_step else ("✓" if index < current_step else "○")
-            st.write(f"{marker} {index}. {label}")
+        total_steps = len(WORKFLOW_STEPS)
+        st.markdown("#### Workflow progress")
+        st.progress(
+            current_step / total_steps,
+            text=f"Step {current_step} of {total_steps}: "
+            f"{WORKFLOW_STEPS[current_step - 1]}",
+        )
+        with st.expander("All workflow steps", expanded=False):
+            for index, label in enumerate(WORKFLOW_STEPS, start=1):
+                if index < current_step:
+                    marker = ":material/check_circle:"
+                elif index == current_step:
+                    marker = ":material/play_circle:"
+                else:
+                    marker = ":material/radio_button_unchecked:"
+                st.markdown(f"{marker} {index}. {label}")
 
         if SHOW_INTERNAL_COSTS:
             st.toggle(
@@ -265,6 +260,7 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
                 help="Available only because SHOW_INTERNAL_COSTS is enabled.",
             )
 
+        st.divider()
         st.markdown("#### Demo scenarios")
         scenario_by_name = {
             scenario.name: scenario for scenario in DEMO_SCENARIOS
@@ -276,7 +272,11 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
         )
         selected_scenario = scenario_by_name[selected_name]
         st.caption(selected_scenario.description)
-        if st.button("Load scenario", use_container_width=True):
+        if st.button(
+            "Load scenario",
+            icon=":material/download:",
+            use_container_width=True,
+        ):
             load_demo_scenario(
                 st.session_state,
                 selected_scenario.scenario_id,
@@ -300,7 +300,8 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
 
         st.divider()
         st.markdown("#### Draft summary")
-        _render_sidebar_draft(state.draft)
+        with st.container(border=True):
+            _render_sidebar_draft(state.draft)
 
 
 def _current_step(state: QuotationWorkflowState) -> int:
@@ -362,11 +363,13 @@ def _render_stage_indicator(state: QuotationWorkflowState) -> None:
             output_available,
         ),
     )
-    stage_markup = "".join(
-        f'<span class="status-pill{" active" if active else ""}">{label}</span>'
-        for label, active in stages
-    )
-    st.markdown(stage_markup, unsafe_allow_html=True)
+    columns = st.columns(len(stages), gap="small")
+    for column, (label, active) in zip(columns, stages):
+        with column:
+            if active:
+                st.markdown(f"**:blue[:material/adjust: {label}]**")
+            else:
+                st.markdown(f":gray[:material/circle: {label}]")
 
 
 def _render_sidebar_draft(draft: QuotationDraft) -> None:
@@ -386,39 +389,47 @@ def _render_sidebar_draft(draft: QuotationDraft) -> None:
         ),
     }
     for label, value in summary.items():
-        st.markdown(f"**{label}:** {value}")
+        st.markdown(f"**{label}**  \n:gray[{value}]")
 
 
 def _render_main_draft(draft: QuotationDraft) -> None:
-    st.dataframe(
-        [
-            {
-                "Customer": draft.customer_name or "Not provided",
-                "Region": draft.region or "Not provided",
-                "Product request": draft.product_query or "Not provided",
-                "Selected product": ", ".join(draft.selected_product_ids)
-                or "Not selected",
-                "Quantity": draft.quantity,
-                "Currency": draft.currency,
-                "Incoterm": draft.incoterm or "Not provided",
-                "Delivery": draft.delivery_location or "Not provided",
-            }
-        ],
-        use_container_width=True,
-        hide_index=True,
+    fields = (
+        ("Customer", draft.customer_name or "Not provided"),
+        ("Region", draft.region or "Not provided"),
+        ("Product request", draft.product_query or "Not provided"),
+        (
+            "Selected product",
+            ", ".join(draft.selected_product_ids) or "Not selected",
+        ),
+        ("Quantity", str(draft.quantity)),
+        ("Currency", draft.currency),
+        ("Incoterm", draft.incoterm or "Not provided"),
+        ("Delivery", draft.delivery_location or "Not provided"),
     )
+    columns = st.columns(4, gap="medium")
+    for index, (label, value) in enumerate(fields):
+        with columns[index % 4]:
+            st.markdown(f"**{label}**  \n:gray[{value}]")
+
     if draft.missing_fields:
         st.warning(
             "Still required: "
             + ", ".join(
                 field_name.replace("_", " ")
                 for field_name in draft.missing_fields
-            )
+            ),
+            icon=":material/pending_actions:",
         )
     elif not draft.selected_product_ids:
-        st.info("Requirements are complete. Select a recommended product next.")
+        st.info(
+            "Requirements are complete. Select a recommended product next.",
+            icon=":material/inventory_2:",
+        )
     else:
-        st.success("Requirements are complete and a product is selected.")
+        st.success(
+            "Requirements are complete and a product is selected.",
+            icon=":material/task_alt:",
+        )
 
 
 def _render_product_selection(
@@ -427,21 +438,32 @@ def _render_product_selection(
 ) -> None:
     items = _selectable_items(recommendation)
     if not items:
-        st.info("Add more product detail to obtain a catalog recommendation.")
+        st.info(
+            "Add more product detail to obtain a catalog recommendation.",
+            icon=":material/info:",
+        )
         return
 
     main_model = recommendation.main_model
     if main_model:
         st.markdown(
-            f"**Recommended:** {main_model.short_description}  \n"
+            f"**Recommended**  \n{main_model.short_description}  \n"
             f"Product ID: `{main_model.product_id}`"
         )
-        st.info(f"Why this product: {main_model.reason}")
+        st.info(
+            f"Why this product: {main_model.reason}",
+            icon=":material/lightbulb:",
+        )
     if recommendation.accessories:
-        with st.expander("Configured supporting components", expanded=False):
+        with st.expander(
+            "Configured supporting components",
+            expanded=False,
+            icon=":material/handyman:",
+        ):
             for item in recommendation.accessories:
-                st.write(
-                    f"- {item.short_description} ({item.product_id}): {item.reason}"
+                st.markdown(
+                    f"- **{item.short_description}** (`{item.product_id}`)  \n"
+                    f"  :gray[{item.reason}]"
                 )
     if recommendation.alternatives:
         st.caption("Alternatives are available in the selector below.")
@@ -455,7 +477,11 @@ def _render_product_selection(
         ),
         key=f"product_choice_{state.draft.quotation_id}",
     )
-    if st.button("Use selected product", type="primary"):
+    if st.button(
+        "Use selected product",
+        type="primary",
+        icon=":material/check:",
+    ):
         agent = get_conversation_agent()
         try:
             select_recommended_product(
@@ -469,7 +495,10 @@ def _render_product_selection(
                 "Product selection was rejected (%s).",
                 type(error).__name__,
             )
-            st.error(f"I could not select that product: {error}")
+            st.error(
+                f"I could not select that product: {error}",
+                icon=":material/error:",
+            )
             return
 
         message = (
@@ -488,7 +517,11 @@ def _render_quotation_editor(
     state: QuotationWorkflowState,
     recommendation: QuoteRecommendation | None,
 ) -> None:
-    with st.expander("Edit quotation and revalidate", expanded=False):
+    with st.expander(
+        "Edit quotation and revalidate",
+        expanded=False,
+        icon=":material/edit:",
+    ):
         items = _selectable_items(recommendation) if recommendation else ()
         item_by_id = {item.product_id: item for item in items}
         current_product = state.draft.selected_product_ids[0]
@@ -564,7 +597,11 @@ def _render_quotation_editor(
                 "Delivery location",
                 value=state.draft.delivery_location,
             )
-            submitted = st.form_submit_button("Save edits and require re-analysis")
+            submitted = st.form_submit_button(
+                "Save edits and require re-analysis",
+                icon=":material/save:",
+                use_container_width=True,
+            )
 
         if submitted:
             try:
@@ -580,7 +617,10 @@ def _render_quotation_editor(
                     delivery_location=delivery_location,
                 )
             except ValueError as error:
-                st.error(f"The quotation could not be updated: {error}")
+                st.error(
+                    f"The quotation could not be updated: {error}",
+                    icon=":material/error:",
+                )
                 return
             if changed_fields:
                 st.session_state.messages.append(
@@ -593,7 +633,10 @@ def _render_quotation_editor(
                     }
                 )
                 st.rerun()
-            st.info("No quotation fields changed.")
+            st.info(
+                "No quotation fields changed.",
+                icon=":material/info:",
+            )
 
 
 def _render_pricing_analysis(
@@ -613,6 +656,7 @@ def _render_pricing_analysis(
     if st.button(
         "Analyse quotation",
         type="primary",
+        icon=":material/calculate:",
         disabled=approval_complete,
     ):
         try:
@@ -633,7 +677,10 @@ def _render_pricing_analysis(
                 "Pricing analysis failed (%s).",
                 type(error).__name__,
             )
-            st.error(f"Pricing analysis is unavailable: {error}")
+            st.error(
+                f"Pricing analysis is unavailable: {error}",
+                icon=":material/error:",
+            )
             return
         st.rerun()
 
@@ -642,7 +689,7 @@ def _render_pricing_analysis(
         return
 
     currency = result.currency or "USD"
-    metrics = st.columns(4)
+    metrics = st.columns(4, gap="medium", border=True)
     metrics[0].metric("Selected product", state.draft.selected_product_ids[0])
     metrics[1].metric("Quantity", state.draft.quantity)
     metrics[2].metric(
@@ -651,7 +698,7 @@ def _render_pricing_analysis(
     )
     metrics[3].metric("Confidence", result.confidence_label or "Low")
 
-    price_metrics = st.columns(4)
+    price_metrics = st.columns(4, gap="medium", border=True)
     price_metrics[0].metric(
         "Recommended unit price",
         _format_money(result.recommended_unit_price, currency),
@@ -670,7 +717,10 @@ def _render_pricing_analysis(
     )
 
     if result.recommended_unit_price is None:
-        st.error("Pricing is unavailable for the selected product.")
+        st.error(
+            "Pricing is unavailable for the selected product.",
+            icon=":material/error:",
+        )
 
     if result.internal_evidence:
         st.markdown("#### Internal comparable evidence")
@@ -693,7 +743,11 @@ def _render_pricing_analysis(
         )
 
     if result.assumptions:
-        with st.expander("How the price was calculated", expanded=True):
+        with st.expander(
+            "How the price was calculated",
+            expanded=True,
+            icon=":material/functions:",
+        ):
             st.write(
                 "The engine selects strong exact/description comparables, uses "
                 "the configured median price hierarchy, applies the quantity "
@@ -702,10 +756,14 @@ def _render_pricing_analysis(
             for assumption in result.assumptions:
                 st.write(f"- {assumption}")
     for warning in result.warnings:
-        st.warning(warning)
+        st.warning(warning, icon=":material/warning:")
 
     if _internal_data_visible():
-        with st.expander("Internal analysis — restricted", expanded=False):
+        with st.expander(
+            "Internal analysis — restricted",
+            expanded=False,
+            icon=":material/lock:",
+        ):
             st.metric(
                 "Estimated unit cost",
                 _format_money(result.estimated_cost, currency),
@@ -716,10 +774,11 @@ def _render_pricing_analysis(
             )
 
     st.divider()
-    st.header("E. Validation")
+    st.subheader("E. Validation")
     if st.button(
         "Run technical and commercial validation",
         type="primary",
+        icon=":material/rule:",
         disabled=result.recommended_unit_price is None,
     ):
         conversation_agent = get_conversation_agent()
@@ -734,12 +793,18 @@ def _render_pricing_analysis(
                 "Validation could not start (%s).",
                 type(error).__name__,
             )
-            st.error(f"Validation could not be completed: {error}")
+            st.error(
+                f"Validation could not be completed: {error}",
+                icon=":material/error:",
+            )
             return
         st.rerun()
 
     if state.validation_stale:
-        st.info("Validation is pending or stale. Run validation before proceeding.")
+        st.info(
+            "Validation is pending or stale. Run validation before proceeding.",
+            icon=":material/hourglass_top:",
+        )
     elif state.technical_validation and state.commercial_validation:
         _render_validation_results(
             state.technical_validation,
@@ -763,31 +828,34 @@ def _render_validation_results(
     commercial: CommercialValidationResult,
     state: QuotationWorkflowState,
 ) -> None:
-    st.subheader("Validation")
     technical_icon = _status_icon(technical.status)
-    st.markdown(
-        f"### {technical_icon} Technical validation: "
-        f"{technical.status.replace('_', ' ').upper()}"
-    )
-    if technical.passed_checks:
-        st.markdown("**Passed checks**")
-        for check in technical.passed_checks:
-            st.write(f"- PASS: {check}")
-    if technical.warnings:
-        st.markdown("**Warnings**")
-        for warning in technical.warnings:
-            st.write(f"- WARNING: {warning}")
-    if technical.errors:
-        st.markdown("**Errors**")
-        for error in technical.errors:
-            st.write(f"- ERROR: {error}")
-    if technical.not_evaluated_checks:
-        st.markdown("**Not evaluated**")
-        for check in technical.not_evaluated_checks:
-            st.write(f"- NOT EVALUATED: {check}")
+    with st.container(border=True):
+        st.markdown(
+            f"#### {technical_icon} Technical validation — "
+            f"{technical.status.replace('_', ' ').upper()}"
+        )
+        check_groups = (
+            ("Passed checks", technical.passed_checks, ":material/check_circle:"),
+            ("Warnings", technical.warnings, ":material/warning:"),
+            ("Errors", technical.errors, ":material/cancel:"),
+            (
+                "Not evaluated",
+                technical.not_evaluated_checks,
+                ":material/help:",
+            ),
+        )
+        populated = [group for group in check_groups if group[1]]
+        if populated:
+            for tab, (title, entries, icon) in zip(
+                st.tabs([f"{title} ({len(entries)})" for title, entries, _ in populated]),
+                populated,
+            ):
+                with tab:
+                    for entry in entries:
+                        st.markdown(f"{icon} {entry}")
 
     st.markdown(
-        f"### {_status_icon(commercial.status)} Commercial validation: "
+        f"#### {_status_icon(commercial.status)} Commercial validation — "
         f"{commercial.status.replace('_', ' ').upper()}"
     )
     st.dataframe(
@@ -806,37 +874,47 @@ def _render_validation_results(
 
     decision = state.combined_decision
     if decision:
-        st.markdown("### Logical judgement")
-        st.markdown(
-            f"## {_status_icon(decision.status)} "
-            f"{decision.status.replace('_', ' ').upper()}"
-        )
-        st.write(decision.summary)
-        if decision.triggered_rule_ids:
-            st.write(
-                "Triggered rules: " + ", ".join(decision.triggered_rule_ids)
+        with st.container(border=True):
+            st.markdown(
+                f"#### {_status_icon(decision.status)} Logical judgement — "
+                f"{decision.status.replace('_', ' ').upper()}"
             )
-        st.info(f"Next action: {decision.recommended_next_action}")
-        if decision.approval_required:
-            st.warning(
-                "Review is required before approval can be completed."
+            st.write(decision.summary)
+            if decision.triggered_rule_ids:
+                st.caption(
+                    "Triggered rules: "
+                    + ", ".join(decision.triggered_rule_ids)
+                )
+            st.info(
+                f"Next action: {decision.recommended_next_action}",
+                icon=":material/arrow_forward:",
             )
-        elif decision.status == "blocked":
-            st.error(
-                "This quotation is blocked. Correct the stated issues and "
-                "revalidate, or request revision."
-            )
-        else:
-            st.success("The quotation can proceed to human review.")
+            if decision.approval_required:
+                st.warning(
+                    "Review is required before approval can be completed.",
+                    icon=":material/gavel:",
+                )
+            elif decision.status == "blocked":
+                st.error(
+                    "This quotation is blocked. Correct the stated issues and "
+                    "revalidate, or request revision.",
+                    icon=":material/block:",
+                )
+            else:
+                st.success(
+                    "The quotation can proceed to human review.",
+                    icon=":material/task_alt:",
+                )
 
 
 def _render_approval_panel(state: QuotationWorkflowState) -> None:
     approval = prepare_approval(state)
     st.divider()
-    st.header("F. Human Review")
+    st.subheader("F. Human review")
     st.warning(
         "Demo-only simulated approval. The selected role is not authenticated "
-        "and this action is not a company authorization."
+        "and this action is not a company authorization.",
+        icon=":material/policy:",
     )
     recommended_price = state.pricing_result.recommended_unit_price
     proposed_price = (
@@ -844,7 +922,7 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
         if state.draft.proposed_unit_price is not None
         else recommended_price
     )
-    approval_metrics = st.columns(3)
+    approval_metrics = st.columns(3, gap="medium", border=True)
     approval_metrics[0].metric(
         "Recommended unit price",
         _format_money(recommended_price, state.pricing_result.currency),
@@ -859,13 +937,16 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
     )
 
     if state.combined_decision.triggered_rule_ids:
-        st.write(
+        st.caption(
             "Review reasons: "
             + ", ".join(state.combined_decision.triggered_rule_ids)
         )
 
     if approval.status == ApprovalStatus.PENDING_REVIEW:
-        st.info(approval_reminder_status(state))
+        st.info(
+            approval_reminder_status(state),
+            icon=":material/schedule:",
+        )
         actions = available_approval_actions(state)
         with st.form(f"approval_{state.draft.quotation_id}"):
             actor_role = st.selectbox("Approver role", APPROVER_ROLES)
@@ -884,13 +965,26 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
             )
             submitted_action = None
             action_labels = {
-                ACTION_APPROVE: "Approve",
-                ACTION_APPROVE_WITH_OVERRIDE: "Approve with override",
-                ACTION_REQUEST_REVISION: "Request revision",
-                ACTION_REJECT: "Reject",
+                ACTION_APPROVE: ("Approve", ":material/check_circle:"),
+                ACTION_APPROVE_WITH_OVERRIDE: (
+                    "Approve with override",
+                    ":material/published_with_changes:",
+                ),
+                ACTION_REQUEST_REVISION: (
+                    "Request revision",
+                    ":material/edit_note:",
+                ),
+                ACTION_REJECT: ("Reject", ":material/cancel:"),
             }
-            for action in actions:
-                if st.form_submit_button(action_labels[action]):
+            action_columns = st.columns(len(actions) or 1, gap="small")
+            for column, action in zip(action_columns, actions):
+                label, icon = action_labels[action]
+                if column.form_submit_button(
+                    label,
+                    icon=icon,
+                    type="primary" if action == ACTION_APPROVE else "secondary",
+                    use_container_width=True,
+                ):
                     submitted_action = action
 
         if submitted_action:
@@ -904,75 +998,99 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
                     final_unit_price=float(final_price),
                 )
             except ApprovalWorkflowError as error:
-                st.error(f"Approval action was not accepted: {error}")
+                st.error(
+                    f"Approval action was not accepted: {error}",
+                    icon=":material/error:",
+                )
                 return
             st.rerun()
         return
 
     status_label = approval.status.value.replace("_", " ").upper()
-    st.markdown(f"### {_status_icon(approval.status.value)} {status_label}")
-    if approval.actor:
-        st.write(f"Actor: {approval.actor} ({approval.actor_role})")
-    if approval.final_price is not None:
-        st.write(
-            "Final approved unit price: "
-            + _format_money(
-                approval.final_price,
-                state.pricing_result.currency,
+    with st.container(border=True):
+        st.markdown(f"#### {_status_icon(approval.status.value)} {status_label}")
+        if approval.actor:
+            st.markdown(f"**Actor**  \n:gray[{approval.actor} ({approval.actor_role})]")
+        if approval.final_price is not None:
+            st.markdown(
+                "**Final approved unit price**  \n:gray["
+                + _format_money(
+                    approval.final_price,
+                    state.pricing_result.currency,
+                )
+                + "]"
             )
-        )
-    if approval.reason:
-        st.write(f"Reason: {approval.reason}")
-    if approval.timestamp:
-        st.caption(f"Recorded at {approval.timestamp.isoformat()}")
+        if approval.reason:
+            st.markdown(f"**Reason**  \n:gray[{approval.reason}]")
+        if approval.timestamp:
+            st.caption(f"Recorded at {approval.timestamp.isoformat()}")
 
 
 def _render_output_stage(state: QuotationWorkflowState) -> None:
     st.divider()
-    st.header("G. Communication")
+    st.subheader("G. Communication")
     status = state.approval.status
     try:
+        previews: list[tuple[str, EmailOutput, str]] = []
         if status in APPROVED_STATUSES or status == ApprovalStatus.PENDING_REVIEW:
             internal_email = generate_internal_approval_email(state)
             state.internal_email = internal_email
-            st.markdown("### Internal approval email preview")
-            _render_email_preview(internal_email, state, "internal")
+            previews.append(("Internal approval", internal_email, "internal"))
 
         if status == ApprovalStatus.PENDING_REVIEW:
-            reminder_email = generate_reminder_email(state)
-            st.markdown("### Internal reminder email preview")
-            _render_email_preview(reminder_email, state, "reminder")
+            previews.append(
+                ("Internal reminder", generate_reminder_email(state), "reminder")
+            )
 
         if status in {
             ApprovalStatus.REJECTED,
             ApprovalStatus.REVISION_REQUESTED,
         }:
-            revision_email = generate_revision_email(state)
-            st.markdown("### Rejection / revision notification preview")
-            _render_email_preview(revision_email, state, "revision")
+            previews.append(
+                (
+                    "Rejection / revision",
+                    generate_revision_email(state),
+                    "revision",
+                )
+            )
 
+        quotation_pdf = None
         if status in APPROVED_STATUSES:
             customer_email = generate_customer_email(state)
             quotation_pdf = generate_quotation_pdf(state)
             state.customer_email = customer_email
-            st.markdown("### Customer quotation email preview")
-            _render_email_preview(customer_email, state, "customer")
-            st.header("H. Documents and Audit")
+            previews.append(("Customer quotation", customer_email, "customer"))
+
+        if previews:
+            for tab, (title, email, preview_key) in zip(
+                st.tabs([title for title, _, _ in previews]),
+                previews,
+            ):
+                with tab:
+                    _render_email_preview(email, state, preview_key)
+
+        if status in APPROVED_STATUSES and quotation_pdf is not None:
+            st.divider()
+            st.subheader("H. Documents and audit")
             _render_customer_quotation_preview(state)
             st.download_button(
                 "Download quotation PDF",
                 data=quotation_pdf.bytes_data,
                 file_name=quotation_pdf.filename,
                 mime=quotation_pdf.mime_type,
+                icon=":material/picture_as_pdf:",
+                type="primary",
             )
             _render_audit_exports(state, include_customer=True)
         elif status in {
             ApprovalStatus.REJECTED,
             ApprovalStatus.REVISION_REQUESTED,
         }:
-            st.header("H. Documents and Audit")
+            st.divider()
+            st.subheader("H. Documents and audit")
             st.info(
-                "A customer PDF is unavailable because this quotation was not approved."
+                "A customer PDF is unavailable because this quotation was not approved.",
+                icon=":material/info:",
             )
             _render_audit_exports(state, include_customer=False)
     except OutputGenerationError as error:
@@ -980,7 +1098,10 @@ def _render_output_stage(state: QuotationWorkflowState) -> None:
             "Output generation failed (%s).",
             type(error).__name__,
         )
-        st.error(f"Outputs could not be generated: {error}")
+        st.error(
+            f"Outputs could not be generated: {error}",
+            icon=":material/error:",
+        )
 
 
 def _render_email_preview(
@@ -1003,7 +1124,10 @@ def _render_email_preview(
 def _render_customer_quotation_preview(state: QuotationWorkflowState) -> None:
     pricing = state.pricing_result
     if pricing is None:
-        st.error("Current pricing is required for the quotation preview.")
+        st.error(
+            "Current pricing is required for the quotation preview.",
+            icon=":material/error:",
+        )
         return
     final_price = state.approval.final_price
     total = (
@@ -1011,7 +1135,7 @@ def _render_customer_quotation_preview(state: QuotationWorkflowState) -> None:
         if final_price is not None
         else None
     )
-    st.markdown("### Final quotation preview")
+    st.markdown("#### Final quotation preview")
     st.dataframe(
         [
             {
@@ -1033,13 +1157,15 @@ def _render_audit_exports(
     *,
     include_customer: bool,
 ) -> None:
-    st.subheader("Structured audit exports")
-    columns = st.columns(2 if include_customer else 1)
+    st.markdown("#### Structured audit exports")
+    columns = st.columns(2 if include_customer else 1, gap="medium")
     columns[0].download_button(
         "Download internal audit JSON",
         data=export_json_bytes(build_internal_audit_export(state)),
         file_name=f"{state.draft.quotation_id}-internal-audit.json",
         mime="application/json",
+        icon=":material/description:",
+        use_container_width=True,
     )
     if include_customer:
         columns[1].download_button(
@@ -1047,6 +1173,8 @@ def _render_audit_exports(
             data=export_json_bytes(build_customer_quotation_export(state)),
             file_name=f"{state.draft.quotation_id}-customer-data.json",
             mime="application/json",
+            icon=":material/description:",
+            use_container_width=True,
         )
 
 

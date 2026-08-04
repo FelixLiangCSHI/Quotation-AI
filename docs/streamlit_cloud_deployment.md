@@ -50,6 +50,7 @@ synthetic allowlist.
    - `app/*.py`,
    - `Data/synthetic/**`,
    - `streamlit_app.py`,
+   - `.streamlit/config.toml` (theme only; never `secrets.toml`),
    - `requirements.txt`,
    - `runtime.txt`,
    - `.gitignore`,
