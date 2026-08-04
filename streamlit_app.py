@@ -39,29 +39,51 @@ from app.email_generator import (
     generate_revision_email,
 )
 from app.output_context import APPROVED_STATUSES, OutputGenerationError
+from app.ingestion.pricing_source import resolve_pricing_source
 from app.pricing_data import PricingDataError
 from app.pricing_engine import PricingEngine
+from app.line_items import (
+    LineItemError,
+    add_line_item,
+    build_recommendations,
+    quotation_total,
+    remove_line_item,
+    update_line_item,
+)
 from app.quotation_models import (
     ApprovalStatus,
     CommercialValidationResult,
     EmailOutput,
+    LineItemCategory,
     QuotationDraft,
     QuotationWorkflowState,
+    RecommendationStatus,
     TechnicalValidationResult,
     WorkflowStage,
 )
+from app.requirement_fields import (
+    ALLOWED_CURRENCIES,
+    ALLOWED_INCOTERMS,
+)
+from app.requirement_intake import pending_confirmations
 from app.recommender import QuoteRecommendation, RecommendationItem
 from app.recommender import QuoteRecommender
 from app.workflow_orchestrator import (
     WorkflowOrchestrationError,
     analyse_workflow_pricing,
+    apply_structured_requirements,
+    confirm_requirement_candidate,
     process_requirement_message,
     select_recommended_product,
     validate_workflow,
 )
-from app.workflow_state import (
-    get_or_initialize_workflow_state,
-    reset_workflow_state,
+from app.repositories.interfaces import QuotationVersionConflictError
+from app.services.workflow_session import (
+    duplicate_active_quotation,
+    ensure_schema,
+    get_active_quotation,
+    persist_workflow_state,
+    start_new_quotation,
 )
 from app.workflow_validation import (
     apply_quotation_edits,
@@ -110,11 +132,43 @@ def get_conversation_agent() -> RequirementConversationAgent:
 
 @st.cache_resource
 def get_pricing_engine() -> PricingEngine:
-    return PricingEngine()
+    # The engine prices against the explicitly activated published dataset.
+    # When no version is active the synthetic development dataset is used.
+    source = resolve_pricing_source()
+    return PricingEngine(records=source.records)
+
+
+
+def _persist_and_rerun(
+    state: QuotationWorkflowState,
+    *,
+    event_type: str = "quotation_updated",
+    changed_fields: tuple[str, ...] = (),
+) -> None:
+    """Write the mutated state to the database, then re-render.
+
+    Every rerun boundary goes through here so no workflow change exists only
+    in the browser session.
+    """
+
+    try:
+        persist_workflow_state(
+            st.session_state,
+            state,
+            event_type=event_type,
+            changed_fields=changed_fields,
+        )
+    except QuotationVersionConflictError as error:
+        st.error(str(error), icon=":material/sync_problem:")
+        return
+    st.rerun()
 
 
 def main() -> None:
-    state = get_or_initialize_workflow_state(st.session_state)
+    # Trusted quotation state lives in the database. Session state holds only
+    # the active quotation reference; it is reloaded on every interaction.
+    ensure_schema()
+    state = get_active_quotation(st.session_state).state
     _initialize_messages()
     _render_sidebar(state)
 
@@ -141,7 +195,11 @@ def main() -> None:
         with st.container(border=True):
             _render_main_draft(state.draft)
 
+        _render_pending_confirmations(state)
+        _render_structured_requirement_form(state)
+
         recommendation = state.product_recommendation
+        _render_line_item_workspace(state, recommendation)
         if isinstance(recommendation, QuoteRecommendation):
             st.subheader("C. Product recommendation")
             with st.container(border=True):
@@ -195,7 +253,7 @@ def main() -> None:
             "content": "\n\n".join(response_parts),
         }
     )
-    st.rerun()
+    _persist_and_rerun(state, event_type="requirements_updated")
 
 
 def _initialize_messages() -> None:
@@ -219,10 +277,41 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
             icon=":material/add:",
             use_container_width=True,
         ):
-            reset_workflow_state(st.session_state)
+            start_new_quotation(st.session_state)
             st.session_state.pop(SCENARIO_SESSION_KEY, None)
             st.session_state.messages = [_welcome_message()]
             st.rerun()
+
+        duplicate_column, version_column = st.columns(2)
+        with duplicate_column:
+            if st.button(
+                "Duplicate",
+                icon=":material/content_copy:",
+                use_container_width=True,
+                help=(
+                    "Copy requirements and line items into a new draft. "
+                    "Pricing and approval are not copied."
+                ),
+            ):
+                duplicate_active_quotation(
+                    st.session_state, state.draft.quotation_id
+                )
+                st.session_state.messages = [_welcome_message()]
+                st.rerun()
+        with version_column:
+            if st.button(
+                "New version",
+                icon=":material/difference:",
+                use_container_width=True,
+                help="Clone as a new version, keeping the audit lineage.",
+            ):
+                duplicate_active_quotation(
+                    st.session_state,
+                    state.draft.quotation_id,
+                    as_new_version=True,
+                )
+                st.session_state.messages = [_welcome_message()]
+                st.rerun()
 
         st.caption("Current quotation ID")
         st.code(state.draft.quotation_id, language=None)
@@ -277,10 +366,14 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
             icon=":material/download:",
             use_container_width=True,
         ):
-            load_demo_scenario(
-                st.session_state,
+            # The demo helper builds its state in a throwaway mapping; the
+            # result is then persisted as a new quotation rather than being
+            # parked in Streamlit session state.
+            demo_state = load_demo_scenario(
+                {},
                 selected_scenario.scenario_id,
             )
+            start_new_quotation(st.session_state, state=demo_state)
             st.session_state.messages = [
                 {
                     "role": "user",
@@ -390,6 +483,349 @@ def _render_sidebar_draft(draft: QuotationDraft) -> None:
     }
     for label, value in summary.items():
         st.markdown(f"**{label}**  \n:gray[{value}]")
+
+
+def _render_pending_confirmations(state: QuotationWorkflowState) -> None:
+    """Low-confidence Agent 1 candidates must be confirmed before use."""
+
+    pending = pending_confirmations(state.draft)
+    if not pending:
+        return
+    st.subheader("B1. Suggestions awaiting confirmation")
+    with st.container(border=True):
+        for item in pending:
+            st.markdown(f"**{item.question}**")
+            st.caption(
+                f"Source: {item.source} · confidence {item.confidence:.0%}"
+            )
+            accept_column, discard_column = st.columns(2)
+            with accept_column:
+                if st.button(
+                    "Confirm",
+                    key=f"confirm_{item.field_name}",
+                    icon=":material/check:",
+                ):
+                    confirm_requirement_candidate(
+                        state, item.field_name, accept=True
+                    )
+                    _persist_and_rerun(
+                        state,
+                        event_type="requirement_confirmed",
+                        changed_fields=(item.field_name,),
+                    )
+            with discard_column:
+                if st.button(
+                    "Discard",
+                    key=f"discard_{item.field_name}",
+                    icon=":material/close:",
+                ):
+                    confirm_requirement_candidate(
+                        state, item.field_name, accept=False
+                    )
+                    _persist_and_rerun(
+                        state, event_type="requirement_discarded"
+                    )
+
+
+def _render_structured_requirement_form(state: QuotationWorkflowState) -> None:
+    """Structured alternative to conversational entry.
+
+    Both entry modes call the same merge logic, so they update the same
+    quotation domain model.
+    """
+
+    draft = state.draft
+    with st.expander(
+        "Structured requirement form",
+        expanded=False,
+        icon=":material/list_alt:",
+    ):
+        with st.form(f"requirement_form_{draft.quotation_id}"):
+            left, right = st.columns(2, gap="medium")
+            with left:
+                customer_name = st.text_input(
+                    "Customer name", value=draft.customer_name
+                )
+                region = st.text_input("Region", value=draft.region)
+                product_query = st.text_area(
+                    "Product request", value=draft.product_query, height=80
+                )
+                quantity = st.number_input(
+                    "Quantity", min_value=1, step=1, value=max(draft.quantity, 1)
+                )
+                intended_use = st.text_input(
+                    "Intended use", value=draft.intended_use
+                )
+                budget_notes = st.text_input(
+                    "Budget notes", value=draft.budget_notes
+                )
+            with right:
+                currency_options = list(ALLOWED_CURRENCIES)
+                currency = st.selectbox(
+                    "Currency",
+                    options=currency_options,
+                    index=(
+                        currency_options.index(draft.currency)
+                        if draft.currency in currency_options
+                        else 0
+                    ),
+                )
+                incoterm_options = ["", *ALLOWED_INCOTERMS]
+                incoterm = st.selectbox(
+                    "Incoterm",
+                    options=incoterm_options,
+                    index=(
+                        incoterm_options.index(draft.incoterm)
+                        if draft.incoterm in incoterm_options
+                        else 0
+                    ),
+                )
+                delivery_location = st.text_input(
+                    "Delivery location", value=draft.delivery_location
+                )
+                requested_accessories = st.text_input(
+                    "Requested accessories (comma separated)",
+                    value=", ".join(draft.requested_accessories),
+                )
+                requested_services = st.text_input(
+                    "Requested services (comma separated)",
+                    value=", ".join(draft.requested_services),
+                )
+                constraints = st.text_input(
+                    "Other constraints (comma separated)",
+                    value=", ".join(draft.constraints),
+                )
+            submitted = st.form_submit_button(
+                "Apply requirement form",
+                type="primary",
+                icon=":material/save:",
+            )
+
+        if not submitted:
+            return
+
+        outcome = apply_structured_requirements(
+            state,
+            {
+                "customer_name": customer_name,
+                "region": region,
+                "product_query": product_query,
+                "quantity": quantity,
+                "currency": currency,
+                "incoterm": incoterm,
+                "delivery_location": delivery_location,
+                "intended_use": intended_use,
+                "budget_notes": budget_notes,
+                "requested_accessories": requested_accessories,
+                "requested_services": requested_services,
+                "constraints": constraints,
+            },
+            get_conversation_agent(),
+        )
+        for rejected in outcome.rejected:
+            st.error(
+                f"{rejected.field_name}: {rejected.reason}",
+                icon=":material/error:",
+            )
+        if not outcome.changed_fields:
+            return
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "I updated these requirements from the form: "
+                    + ", ".join(outcome.changed_fields)
+                ),
+            }
+        )
+        _persist_and_rerun(
+            state,
+            event_type="requirements_form_submitted",
+            changed_fields=tuple(outcome.changed_fields),
+        )
+
+
+RECOMMENDATION_STATUS_ICONS = {
+    RecommendationStatus.REQUIRED: ":material/priority_high:",
+    RecommendationStatus.RECOMMENDED: ":material/thumb_up:",
+    RecommendationStatus.OPTIONAL: ":material/add_circle:",
+    RecommendationStatus.INCOMPATIBLE: ":material/block:",
+    RecommendationStatus.NOT_EVALUATED: ":material/help:",
+}
+
+
+def _render_line_item_workspace(
+    state: QuotationWorkflowState,
+    recommendation: QuoteRecommendation | None,
+) -> None:
+    engine = get_conversation_agent().recommender.engine
+    st.subheader("B2. Quotation line items")
+    with st.container(border=True):
+        if not state.draft.line_items:
+            st.caption("No line items yet.")
+        for item in state.draft.line_items:
+            with st.container(border=True):
+                st.markdown(
+                    f"**{item.description or item.product_id}** "
+                    f"(`{item.category.value.replace('_', ' ')}`)"
+                )
+                quantity_column, price_column, remove_column = st.columns(
+                    [2, 2, 1], gap="small"
+                )
+                with quantity_column:
+                    quantity = st.number_input(
+                        "Quantity",
+                        min_value=1,
+                        step=1,
+                        value=item.quantity,
+                        key=f"qty_{item.line_id}",
+                    )
+                with price_column:
+                    unit_price = st.number_input(
+                        "Unit price",
+                        min_value=0.0,
+                        step=100.0,
+                        value=float(item.unit_price or 0.0),
+                        key=f"price_{item.line_id}",
+                    )
+                with remove_column:
+                    if st.button(
+                        "Remove",
+                        key=f"remove_{item.line_id}",
+                        icon=":material/delete:",
+                    ):
+                        remove_line_item(state, item.line_id)
+                        _persist_and_rerun(
+                            state,
+                            event_type="line_item_removed",
+                            changed_fields=("line_items",),
+                        )
+                if st.button(
+                    "Apply line changes",
+                    key=f"apply_{item.line_id}",
+                    icon=":material/check:",
+                ):
+                    try:
+                        update_line_item(
+                            state,
+                            item.line_id,
+                            quantity=int(quantity),
+                            unit_price=float(unit_price),
+                        )
+                    except LineItemError as error:
+                        st.error(str(error), icon=":material/error:")
+                    else:
+                        _persist_and_rerun(
+                            state,
+                            event_type="line_item_updated",
+                            changed_fields=("line_items",),
+                        )
+
+        if state.draft.line_items:
+            st.markdown(
+                f"**Committed total**: {quotation_total(state.draft):,.2f} "
+                f"{state.draft.currency}"
+            )
+
+        _render_line_item_recommendations(state, recommendation, engine)
+        _render_manual_line_item_form(state, engine)
+
+
+def _render_line_item_recommendations(
+    state: QuotationWorkflowState,
+    recommendation: QuoteRecommendation | None,
+    engine,
+) -> None:
+    lines = build_recommendations(state.draft, recommendation, engine)
+    if not lines:
+        return
+    with st.expander(
+        "Recommended additions",
+        expanded=False,
+        icon=":material/recommend:",
+    ):
+        for line in lines:
+            icon = RECOMMENDATION_STATUS_ICONS[line.status]
+            st.markdown(
+                f"{icon} **{line.description}** (`{line.product_id}`) — "
+                f":gray[{line.status.value.replace('_', ' ')}]"
+            )
+            if line.status is RecommendationStatus.INCOMPATIBLE:
+                st.caption("This item cannot be added to the configuration.")
+                continue
+            if st.button(
+                "Add to quotation",
+                key=f"add_rec_{line.product_id}",
+                icon=":material/add:",
+            ):
+                try:
+                    add_line_item(
+                        state,
+                        product_id=line.product_id,
+                        description=line.description,
+                        category=line.category,
+                        quantity=line.quantity,
+                        source="recommendation",
+                        engine=engine,
+                    )
+                except LineItemError as error:
+                    st.error(str(error), icon=":material/error:")
+                else:
+                    _persist_and_rerun(
+                        state,
+                        event_type="line_item_added",
+                        changed_fields=("line_items",),
+                    )
+
+
+def _render_manual_line_item_form(
+    state: QuotationWorkflowState,
+    engine,
+) -> None:
+    with st.expander(
+        "Add a service or commercial line",
+        expanded=False,
+        icon=":material/add_circle:",
+    ):
+        with st.form(f"line_item_form_{state.draft.quotation_id}"):
+            category = st.selectbox(
+                "Line type",
+                options=[item.value for item in LineItemCategory],
+                index=[item.value for item in LineItemCategory].index(
+                    LineItemCategory.SERVICE.value
+                ),
+            )
+            product_id = st.text_input("Product id (optional for services)")
+            description = st.text_input("Description")
+            quantity = st.number_input("Quantity", min_value=1, step=1, value=1)
+            unit_price = st.number_input(
+                "Unit price", min_value=0.0, step=100.0, value=0.0
+            )
+            is_optional = st.checkbox("Optional line", value=False)
+            submitted = st.form_submit_button(
+                "Add line item", icon=":material/add:"
+            )
+        if not submitted:
+            return
+        try:
+            add_line_item(
+                state,
+                product_id=product_id,
+                description=description,
+                category=LineItemCategory(category),
+                quantity=int(quantity),
+                unit_price=float(unit_price) or None,
+                is_optional=is_optional,
+                engine=engine,
+            )
+        except LineItemError as error:
+            st.error(str(error), icon=":material/error:")
+            return
+        _persist_and_rerun(
+            state,
+            event_type="line_item_added",
+            changed_fields=("line_items",),
+        )
 
 
 def _render_main_draft(draft: QuotationDraft) -> None:
@@ -510,7 +946,11 @@ def _render_product_selection(
         st.session_state.messages.append(
             {"role": "assistant", "content": message}
         )
-        st.rerun()
+        _persist_and_rerun(
+            state,
+            event_type="product_selected",
+            changed_fields=("selected_product_ids",),
+        )
 
 
 def _render_quotation_editor(
@@ -632,7 +1072,11 @@ def _render_quotation_editor(
                         ),
                     }
                 )
-                st.rerun()
+                _persist_and_rerun(
+                    state,
+                    event_type="quotation_edited",
+                    changed_fields=tuple(changed_fields),
+                )
             st.info(
                 "No quotation fields changed.",
                 icon=":material/info:",
@@ -682,7 +1126,11 @@ def _render_pricing_analysis(
                 icon=":material/error:",
             )
             return
-        st.rerun()
+        _persist_and_rerun(
+            state,
+            event_type="pricing_completed",
+            changed_fields=("pricing_result",),
+        )
 
     result = state.pricing_result
     if result is None:
@@ -798,7 +1246,11 @@ def _render_pricing_analysis(
                 icon=":material/error:",
             )
             return
-        st.rerun()
+        _persist_and_rerun(
+            state,
+            event_type="validation_completed",
+            changed_fields=("combined_decision",),
+        )
 
     if state.validation_stale:
         st.info(
@@ -1003,7 +1455,11 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
                     icon=":material/error:",
                 )
                 return
-            st.rerun()
+            _persist_and_rerun(
+                state,
+                event_type=f"approval_{submitted_action}",
+                changed_fields=("approval",),
+            )
         return
 
     status_label = approval.status.value.replace("_", " ").upper()

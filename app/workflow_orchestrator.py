@@ -18,6 +18,7 @@ from app.quotation_models import (
     WorkflowStage,
 )
 from app.recommender import QuoteRecommendation, RecommendationItem
+from app.requirement_intake import confirm_pending
 from app.rule_engine import QuotationRuleEngine
 from app.technical_validation import validate_technical_configuration
 from app.workflow_state import append_audit_event
@@ -50,6 +51,65 @@ def process_requirement_message(
             details={"changed_fields": list(result.changed_fields)},
         )
     return result
+
+
+def apply_structured_requirements(
+    state: QuotationWorkflowState,
+    values: dict,
+    agent: RequirementConversationAgent,
+):
+    """Apply a structured form submission to the same quotation state.
+
+    The form and the conversation both funnel through the requirement merge
+    logic, so both entry modes update the domain model identically.
+    """
+
+    before_approval_state = state.approval.status.value
+    outcome = agent.apply_structured_form(state.draft, values)
+    state.draft = outcome.draft
+    state.current_stage = state.draft.status
+    if outcome.changed_fields:
+        invalidate_validation_outputs(state, clear_pricing=True)
+        append_audit_event(
+            state,
+            "requirements_form_submitted",
+            actor="user",
+            before_state=before_approval_state,
+            after_state=state.approval.status.value,
+            changed_fields=list(outcome.changed_fields),
+            details={
+                "changed_fields": list(outcome.changed_fields),
+                "rejected_fields": [
+                    item.field_name for item in outcome.rejected
+                ],
+            },
+        )
+    return outcome
+
+
+def confirm_requirement_candidate(
+    state: QuotationWorkflowState,
+    field_name: str,
+    *,
+    accept: bool = True,
+):
+    """Confirm or discard a low-confidence Agent 1 candidate."""
+
+    before_approval_state = state.approval.status.value
+    outcome = confirm_pending(state.draft, field_name, accept=accept)
+    state.draft = outcome.draft
+    if outcome.changed_fields:
+        invalidate_validation_outputs(state, clear_pricing=True)
+        append_audit_event(
+            state,
+            "requirement_confirmed",
+            actor="user",
+            before_state=before_approval_state,
+            after_state=state.approval.status.value,
+            changed_fields=list(outcome.changed_fields),
+            details={"field_name": field_name, "accepted": accept},
+        )
+    return outcome
 
 
 def select_recommended_product(

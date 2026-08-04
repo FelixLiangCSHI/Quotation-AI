@@ -13,6 +13,21 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
 - Streamlit chatbot-style prototype.
 - Deterministic multi-turn requirement collection that retains earlier answers
   and supports explicit corrections.
+- Structured requirement form as an alternative to conversational entry. Both
+  entry modes go through the same validation and merge logic, so they update
+  the same quotation domain model.
+- Typed requirement fields with allowed-value checks (`app/requirement_fields.py`)
+  and a deterministic candidate merge layer (`app/requirement_intake.py`).
+  Optional Agent 1 extraction is validated before it can touch a quotation, and
+  low-confidence candidates must be confirmed explicitly.
+- Multi-line quotations (`app/line_items.py`): one or more main products plus
+  accessories, installation, warranty, service and optional commercial lines,
+  with per-line quantity and price editing. Every product line passes a
+  deterministic compatibility check before it can be added, and recommendations
+  are labelled required, recommended, optional, incompatible or not evaluated.
+- Material edits (adding, editing or removing a line item) clear the pricing
+  run, validation run, approval and generated customer documents.
+- Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
 - Main-product recommendation and explicit product selection before analysis.
 - Deterministic rule checks for:
@@ -21,12 +36,23 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   - detector/grid support,
   - generator/tube specification lookup.
 - Rule review assets for candidate rules that still need SME confirmation.
+- Offline SAP Excel ingestion: upload, validate, map, normalise, review and
+  publish a versioned pricing dataset, with explicit activation and rollback.
+  See `docs/offline_sap_excel_ingestion.md`.
 - Demo output generation scripts for client-facing and internal audit samples.
+- Provider-neutral AI agent slots for Agent 1–4 (`app/agents/`). Deterministic
+  by default with no API key; each agent can be switched independently to an
+  HTTP JSON or OpenAI-compatible provider, and any provider failure falls back
+  to deterministic output. See `docs/agent_provider_configuration.md` and
+  `docs/agent_security_boundaries.md`.
 
 ## Project Structure
 
 ```text
 app/                 Core Python application code
+app/agents/          Provider-neutral AI agent slots for Agent 1-4
+app/ingestion/       Offline SAP Excel ingestion pipeline (no live SAP link)
+pages/               Additional Streamlit pages (pricing data import)
 frontend/            Static web frontend
 rules/               Confirmed, merged, normalized, and review-needed rules
 docs/                Project documentation and meeting/supporting materials

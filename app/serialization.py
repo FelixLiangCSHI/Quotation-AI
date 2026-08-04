@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from dataclasses import fields, is_dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from enum import Enum
 from typing import Any
 
@@ -44,6 +45,10 @@ def _to_jsonable(value: Any, *, customer_facing: bool) -> Any:
         ]
     if isinstance(value, Enum):
         return value.value
+    if isinstance(value, Decimal):
+        # Rendered as a string so exact money values survive JSON transport
+        # without being coerced to binary floating point.
+        return str(value)
     if isinstance(value, (date, datetime)):
         return value.isoformat()
     if isinstance(value, bytes):
