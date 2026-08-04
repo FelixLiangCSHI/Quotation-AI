@@ -25,11 +25,17 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   publish a versioned pricing dataset, with explicit activation and rollback.
   See `docs/offline_sap_excel_ingestion.md`.
 - Demo output generation scripts for client-facing and internal audit samples.
+- Provider-neutral AI agent slots for Agent 1–4 (`app/agents/`). Deterministic
+  by default with no API key; each agent can be switched independently to an
+  HTTP JSON or OpenAI-compatible provider, and any provider failure falls back
+  to deterministic output. See `docs/agent_provider_configuration.md` and
+  `docs/agent_security_boundaries.md`.
 
 ## Project Structure
 
 ```text
 app/                 Core Python application code
+app/agents/          Provider-neutral AI agent slots for Agent 1-4
 app/ingestion/       Offline SAP Excel ingestion pipeline (no live SAP link)
 pages/               Additional Streamlit pages (pricing data import)
 frontend/            Static web frontend
