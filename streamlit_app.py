@@ -59,9 +59,12 @@ from app.workflow_orchestrator import (
     select_recommended_product,
     validate_workflow,
 )
-from app.workflow_state import (
-    get_or_initialize_workflow_state,
-    reset_workflow_state,
+from app.repositories.interfaces import QuotationVersionConflictError
+from app.services.workflow_session import (
+    ensure_schema,
+    get_active_quotation,
+    persist_workflow_state,
+    start_new_quotation,
 )
 from app.workflow_validation import (
     apply_quotation_edits,
@@ -113,8 +116,37 @@ def get_pricing_engine() -> PricingEngine:
     return PricingEngine()
 
 
+
+def _persist_and_rerun(
+    state: QuotationWorkflowState,
+    *,
+    event_type: str = "quotation_updated",
+    changed_fields: tuple[str, ...] = (),
+) -> None:
+    """Write the mutated state to the database, then re-render.
+
+    Every rerun boundary goes through here so no workflow change exists only
+    in the browser session.
+    """
+
+    try:
+        persist_workflow_state(
+            st.session_state,
+            state,
+            event_type=event_type,
+            changed_fields=changed_fields,
+        )
+    except QuotationVersionConflictError as error:
+        st.error(str(error), icon=":material/sync_problem:")
+        return
+    st.rerun()
+
+
 def main() -> None:
-    state = get_or_initialize_workflow_state(st.session_state)
+    # Trusted quotation state lives in the database. Session state holds only
+    # the active quotation reference; it is reloaded on every interaction.
+    ensure_schema()
+    state = get_active_quotation(st.session_state).state
     _initialize_messages()
     _render_sidebar(state)
 
@@ -195,7 +227,7 @@ def main() -> None:
             "content": "\n\n".join(response_parts),
         }
     )
-    st.rerun()
+    _persist_and_rerun(state, event_type="requirements_updated")
 
 
 def _initialize_messages() -> None:
@@ -219,7 +251,7 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
             icon=":material/add:",
             use_container_width=True,
         ):
-            reset_workflow_state(st.session_state)
+            start_new_quotation(st.session_state)
             st.session_state.pop(SCENARIO_SESSION_KEY, None)
             st.session_state.messages = [_welcome_message()]
             st.rerun()
@@ -277,10 +309,14 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
             icon=":material/download:",
             use_container_width=True,
         ):
-            load_demo_scenario(
-                st.session_state,
+            # The demo helper builds its state in a throwaway mapping; the
+            # result is then persisted as a new quotation rather than being
+            # parked in Streamlit session state.
+            demo_state = load_demo_scenario(
+                {},
                 selected_scenario.scenario_id,
             )
+            start_new_quotation(st.session_state, state=demo_state)
             st.session_state.messages = [
                 {
                     "role": "user",
@@ -510,7 +546,11 @@ def _render_product_selection(
         st.session_state.messages.append(
             {"role": "assistant", "content": message}
         )
-        st.rerun()
+        _persist_and_rerun(
+            state,
+            event_type="product_selected",
+            changed_fields=("selected_product_ids",),
+        )
 
 
 def _render_quotation_editor(
@@ -632,7 +672,11 @@ def _render_quotation_editor(
                         ),
                     }
                 )
-                st.rerun()
+                _persist_and_rerun(
+                    state,
+                    event_type="quotation_edited",
+                    changed_fields=tuple(changed_fields),
+                )
             st.info(
                 "No quotation fields changed.",
                 icon=":material/info:",
@@ -682,7 +726,11 @@ def _render_pricing_analysis(
                 icon=":material/error:",
             )
             return
-        st.rerun()
+        _persist_and_rerun(
+            state,
+            event_type="pricing_completed",
+            changed_fields=("pricing_result",),
+        )
 
     result = state.pricing_result
     if result is None:
@@ -798,7 +846,11 @@ def _render_pricing_analysis(
                 icon=":material/error:",
             )
             return
-        st.rerun()
+        _persist_and_rerun(
+            state,
+            event_type="validation_completed",
+            changed_fields=("combined_decision",),
+        )
 
     if state.validation_stale:
         st.info(
@@ -1003,7 +1055,11 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
                     icon=":material/error:",
                 )
                 return
-            st.rerun()
+            _persist_and_rerun(
+                state,
+                event_type=f"approval_{submitted_action}",
+                changed_fields=("approval",),
+            )
         return
 
     status_label = approval.status.value.replace("_", " ").upper()

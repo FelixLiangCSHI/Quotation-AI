@@ -50,6 +50,12 @@ PPT/
 rules/
 Quotation AI.png
 
+# Local SQLite development databases
+*.db
+*.sqlite
+*.sqlite3
+!Data/synthetic/**
+
 # Temporary files
 *.tmp
 *.temp
