@@ -33,7 +33,8 @@ docs/                Project documentation and meeting/supporting materials
 scripts/             Demo, export, normalization, and presentation scripts
 tests/               Unit tests for API, recommender, and rule engine
 quotation_snapshot.json  Source snapshot used by the MVP
-requirements.txt     Python runtime dependencies
+requirements.txt     Streamlit runtime dependencies
+requirements-api.txt Optional FastAPI backend dependencies
 runtime.txt          Streamlit Community Cloud Python version
 streamlit_app.py     Streamlit prototype entry point
 ```
@@ -43,15 +44,22 @@ streamlit_app.py     Streamlit prototype entry point
 - Python 3.11 or newer
 - pip
 
-Install dependencies:
+Install the Streamlit application dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
+`requirements.txt` contains only what the Streamlit app needs. The optional
+FastAPI backend has its own file:
+
+```powershell
+python -m pip install -r requirements-api.txt
+```
+
 ## Run the FastAPI Backend
 
-From the repository root:
+From the repository root (requires `requirements-api.txt`):
 
 ```powershell
 python -m uvicorn app.api:app --host 127.0.0.1 --port 8000

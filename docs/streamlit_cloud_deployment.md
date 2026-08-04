@@ -121,8 +121,9 @@ variable to `synthetic` before public testing.
 - No data persists after the Streamlit session ends.
 - No email is sent.
 - Customer PDF support defaults to English/Western fonts.
-- Streamlit Community Cloud Python 3.11 installation must be confirmed by the
-  hosted build because local Python 3.11 was unavailable.
+- `runtime.txt` requests Python `3.11`. Streamlit Community Cloud only supports
+  major.minor versions, so an exact patch pin such as `python-3.11.9` makes the
+  build fail.
 
 ## Post-deployment record
 
