@@ -21,12 +21,17 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   - detector/grid support,
   - generator/tube specification lookup.
 - Rule review assets for candidate rules that still need SME confirmation.
+- Offline SAP Excel ingestion: upload, validate, map, normalise, review and
+  publish a versioned pricing dataset, with explicit activation and rollback.
+  See `docs/offline_sap_excel_ingestion.md`.
 - Demo output generation scripts for client-facing and internal audit samples.
 
 ## Project Structure
 
 ```text
 app/                 Core Python application code
+app/ingestion/       Offline SAP Excel ingestion pipeline (no live SAP link)
+pages/               Additional Streamlit pages (pricing data import)
 frontend/            Static web frontend
 rules/               Confirmed, merged, normalized, and review-needed rules
 docs/                Project documentation and meeting/supporting materials

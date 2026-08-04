@@ -188,7 +188,7 @@ def run_import(
 
     for plan in resolved_plans:
         plan.profile.validate()
-        rows, row_numbers = _extract_rows(session.workbook, plan.profile)
+        rows, row_numbers = extract_mapped_rows(session.workbook, plan.profile)
         result = validate_rows(
             rows,
             plan.profile,
@@ -238,10 +238,12 @@ def _order_plans(plans: Sequence[DatasetPlan]) -> tuple[DatasetPlan, ...]:
     )
 
 
-def _extract_rows(
+def extract_mapped_rows(
     workbook: WorkbookFile,
     profile: ColumnMappingProfile,
 ) -> tuple[list[dict[str, Any]], list[int]]:
+    """Return the mapped raw values and the worksheet row number of each row."""
+
     preview = read_sheet(
         workbook,
         profile.sheet_name,

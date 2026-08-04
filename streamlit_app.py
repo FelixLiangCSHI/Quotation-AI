@@ -39,6 +39,7 @@ from app.email_generator import (
     generate_revision_email,
 )
 from app.output_context import APPROVED_STATUSES, OutputGenerationError
+from app.ingestion.pricing_source import resolve_pricing_source
 from app.pricing_data import PricingDataError
 from app.pricing_engine import PricingEngine
 from app.quotation_models import (
@@ -113,7 +114,10 @@ def get_conversation_agent() -> RequirementConversationAgent:
 
 @st.cache_resource
 def get_pricing_engine() -> PricingEngine:
-    return PricingEngine()
+    # The engine prices against the explicitly activated published dataset.
+    # When no version is active the synthetic development dataset is used.
+    source = resolve_pricing_source()
+    return PricingEngine(records=source.records)
 
 
 
