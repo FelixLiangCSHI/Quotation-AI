@@ -56,6 +56,9 @@ Quotation AI.png
 *.sqlite3
 !Data/synthetic/**
 
+# Uploaded SAP workbooks and generated fixtures are never committed
+var/
+
 # Temporary files
 *.tmp
 *.temp

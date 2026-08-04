@@ -54,8 +54,10 @@ class User(Base, TimestampMixin):
 class PricingDataVersion(Base, TimestampMixin):
     """A version of the offline SAP/Excel pricing dataset.
 
-    Phase 1 only creates the table and links quotations to it so pricing is
-    reproducible. Ingestion is explicitly out of scope for this phase.
+    Phase 2 fills this table from the ingestion pipeline. A version is created
+    ``staged``, becomes ``published`` on an explicit publish action, and only
+    one version may be ``is_active`` at a time. Activation is always an
+    explicit user action; nothing switches the active version implicitly.
     """
 
     __tablename__ = "pricing_data_versions"
@@ -75,6 +77,138 @@ class PricingDataVersion(Base, TimestampMixin):
     )
     published_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # --- Phase 2: offline Excel ingestion metadata ------------------------
+    source_kind: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="excel_import"
+    )
+    uploaded_by: Mapped[str] = mapped_column(
+        String(150), nullable=False, default=""
+    )
+    uploaded_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    storage_uri: Mapped[str] = mapped_column(
+        String(1000), nullable=False, default=""
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    warning_row_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    rejected_row_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    mapping_profile: Mapped[dict[str, Any]] = mapped_column(
+        JSONDocument, nullable=False, default=dict
+    )
+    validation_summary: Mapped[dict[str, Any]] = mapped_column(
+        JSONDocument, nullable=False, default=dict
+    )
+
+    records: Mapped[list["PricingDataRecord"]] = relationship(
+        back_populates="version",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    rejections: Mapped[list["PricingDataRejection"]] = relationship(
+        back_populates="version",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        Index("ix_pricing_data_versions_checksum", "checksum"),
+        Index("ix_pricing_data_versions_is_active", "is_active"),
+    )
+
+
+class PricingDataRecord(Base):
+    """One accepted canonical row belonging to a pricing data version."""
+
+    __tablename__ = "pricing_data_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(
+        ForeignKey("pricing_data_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    dataset_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_sheet: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    source_row_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    product_id: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+    has_warnings: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONDocument, nullable=False, default=dict
+    )
+
+    version: Mapped["PricingDataVersion"] = relationship(back_populates="records")
+
+    __table_args__ = (
+        Index(
+            "ix_pricing_data_records_version_dataset",
+            "version_id",
+            "dataset_kind",
+        ),
+        Index("ix_pricing_data_records_product", "version_id", "product_id"),
+    )
+
+
+class PricingDataRejection(Base):
+    """A quarantined row. Rejected rows never enter the active dataset."""
+
+    __tablename__ = "pricing_data_rejections"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_id: Mapped[int] = mapped_column(
+        ForeignKey("pricing_data_versions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    dataset_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_sheet: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    source_row_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    issues: Mapped[list[Any]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(
+        JSONDocument, nullable=False, default=dict
+    )
+
+    version: Mapped["PricingDataVersion"] = relationship(
+        back_populates="rejections"
+    )
+
+    __table_args__ = (
+        Index("ix_pricing_data_rejections_version", "version_id"),
+    )
+
+
+class ColumnMappingProfileRecord(Base, TimestampMixin):
+    """A saved, reusable Excel column mapping."""
+
+    __tablename__ = "column_mapping_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    dataset_kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    sheet_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    header_row: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    definition: Mapped[dict[str, Any]] = mapped_column(
+        JSONDocument, nullable=False, default=dict
+    )
+    created_by: Mapped[str] = mapped_column(
+        String(150), nullable=False, default=""
+    )
 
 
 class Quotation(Base, TimestampMixin):
