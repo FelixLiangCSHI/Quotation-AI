@@ -49,11 +49,6 @@ PPT/
 /quotation_snapshot.json
 rules/
 Quotation AI.png
-tests/
-docs/*
-!docs/demo_acceptance_checklist.md
-!docs/streamlit_cloud_deployment.md
-!docs/final_demo_test_report.md
 
 # Temporary files
 *.tmp
