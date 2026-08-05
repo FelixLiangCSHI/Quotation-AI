@@ -115,3 +115,35 @@ def people(auth_provider):
         ),
         "admin": create_user(auth_provider, "avi.admin", Role.ADMINISTRATOR),
     }
+
+
+@pytest.fixture()
+def email_provider():
+    from app.emailing.providers import ConsoleEmailProvider
+
+    return ConsoleEmailProvider()
+
+
+@pytest.fixture()
+def email_config():
+    from tests.fixtures.phase7_helpers import email_config as build
+
+    return build()
+
+
+@pytest.fixture()
+def email_service(session_factory, email_config, email_provider):
+    from app.emailing.service import EmailService
+
+    return EmailService(
+        session_factory, config=email_config, provider=email_provider
+    )
+
+
+@pytest.fixture()
+def reminder_worker(session_factory, email_service, email_config):
+    from app.emailing.reminders import ApprovalReminderWorker
+
+    return ApprovalReminderWorker(
+        session_factory, email_service=email_service, config=email_config
+    )

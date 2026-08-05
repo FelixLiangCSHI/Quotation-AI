@@ -635,9 +635,11 @@ class EmailService:
                 quotation_id=quotation_id,
                 kind="customer_pdf",
                 audience="customer",
-                filename=safe_quotation_filename(quotation_id),
-                mime_type="application/pdf",
-                content=generated.content,
+                filename=generated.filename or safe_quotation_filename(
+                    quotation_id
+                ),
+                mime_type=generated.mime_type,
+                content=generated.bytes_data,
                 quotation_version=quotation_version,
                 generated_by_user_id=user.user_id,
             )

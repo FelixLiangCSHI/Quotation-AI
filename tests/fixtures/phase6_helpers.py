@@ -27,12 +27,14 @@ def create_user(
     role: Role,
     *,
     password: str = PASSWORD,
+    email: str | None = None,
 ):
     provider.create_user(
         username=username,
         password=password,
         roles=(role,),
         display_name=username.title(),
+        email=email if email is not None else f"{username}@internal.invalid",
     )
     return provider.authenticate(username, password)
 

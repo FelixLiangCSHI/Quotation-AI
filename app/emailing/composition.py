@@ -454,12 +454,21 @@ def compose_email(
     if agent is None:
         return deterministic
 
+    # Agent 3 must preserve every trusted value the template actually stated.
+    # A value the template omitted (a margin hidden from this recipient, for
+    # example) must not become something the AI is asked to reproduce.
+    rendered = f"{subject}\n{body}"
+    protected = tuple(
+        value
+        for value in facts.protected_values(audience=audience)
+        if value in rendered
+    )
     outcome = agent.run(
         EmailWordingRequest(
             email_type=email_type.value,
             subject=subject,
             body=body,
-            protected_values=facts.protected_values(audience=audience),
+            protected_values=protected,
         )
     )
     if outcome.fallback_used:
