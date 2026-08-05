@@ -38,6 +38,10 @@ from app.ingestion.repository import (
     PricingDataRepositoryError,
 )
 from app.ingestion.schemas import DatasetKind, get_schema
+from app.auth.provider import PermissionDeniedError
+from app.auth.roles import Permission
+from app.services.auth_session import current_user, sign_in, sign_out
+from app.services.pricing_data_admin import PricingDataAdminService
 from app.ingestion.storage import LocalWorkbookStorage
 from app.ingestion.validation import validate_rows
 from app.ingestion.workbook import WorkbookValidationError
@@ -60,11 +64,50 @@ def _repository() -> PricingDataRepository:
     return PricingDataRepository()
 
 
+def _render_sign_in() -> None:
+    st.title(":material/lock: Sign in")
+    st.caption(
+        "Pricing data administration is an authenticated action. Only an "
+        "administrator may publish or activate a pricing data version."
+    )
+    with st.form("pricing_data_sign_in"):
+        username = st.text_input("Username")
+        secret = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in", icon=":material/login:")
+    if not submitted:
+        return
+    try:
+        sign_in(st.session_state, username=username, password=secret)
+    except Exception as error:  # noqa: BLE001 - shown to the operator
+        st.error(f"Sign in failed: {error}", icon=":material/error:")
+        return
+    st.rerun()
+
+
 def main() -> None:
+    user = current_user(st.session_state)
+    if user is None:
+        _render_sign_in()
+        return
+
     st.title("Pricing data import")
     st.caption(
         "Offline SAP Excel export only. The application never connects to SAP."
     )
+    with st.sidebar:
+        st.markdown(f"**{user.display_name or user.username}**")
+        st.caption(user.primary_role.value.replace("_", " "))
+        if st.button("Sign out", icon=":material/logout:"):
+            sign_out(st.session_state)
+            st.rerun()
+
+    if not user.has_permission(Permission.MANAGE_DATA_VERSIONS):
+        st.error(
+            "Only an administrator may import, publish or activate pricing "
+            "data versions.",
+            icon=":material/block:",
+        )
+        return
 
     upload_tab, review_tab, versions_tab = st.tabs(
         ["1. Upload and map", "2. Review and publish", "3. Versions"]
@@ -72,9 +115,9 @@ def main() -> None:
     with upload_tab:
         _render_upload()
     with review_tab:
-        _render_review()
+        _render_review(user)
     with versions_tab:
-        _render_versions()
+        _render_versions(user)
 
 
 def _render_upload() -> None:
@@ -285,7 +328,7 @@ def _preview_records(
     ]
 
 
-def _render_review() -> None:
+def _render_review(user) -> None:
     import_preview = st.session_state.get(PREVIEW_KEY)
     if import_preview is None:
         st.info("Upload and validate a workbook first.", icon=":material/info:")
@@ -358,7 +401,9 @@ def _render_review() -> None:
         "active version; activation is a separate explicit action."
     )
     label = st.text_input("Version label", value=f"import-{short_hash[:8]}")
-    uploader = st.text_input("Uploaded by", value="internal.user")
+    # The uploader identity is the authenticated principal and is never typed.
+    uploader = user.username
+    st.caption(f"Uploaded by: `{uploader}`")
     notes = st.text_area("Notes", value="")
     confirmed = st.checkbox(
         "I have reviewed the validation results and confirm this import."
@@ -383,7 +428,9 @@ def _render_review() -> None:
                 notes=notes,
                 allow_duplicate_hash=force,
             )
-            published = repository.publish(version.id)
+            published = PricingDataAdminService(
+                repository=repository
+            ).publish(version.id, user=user)
         except DuplicateImportError as error:
             st.error(str(error), icon=":material/content_copy:")
             return
@@ -398,7 +445,7 @@ def _render_review() -> None:
         st.session_state.pop(PREVIEW_KEY, None)
 
 
-def _render_versions() -> None:
+def _render_versions(user) -> None:
     repository = _repository()
     active = repository.get_active_version()
     if active is None:
@@ -459,7 +506,12 @@ def _render_versions() -> None:
     )
     if st.button("Activate selected version", icon=":material/play_arrow:"):
         try:
-            repository.activate(publishable[selected].id)
+            PricingDataAdminService(repository=repository).activate(
+                publishable[selected].id, user=user
+            )
+        except PermissionDeniedError as error:
+            st.error(str(error), icon=":material/block:")
+            return
         except PricingDataRepositoryError as error:
             st.error(str(error), icon=":material/error:")
             return

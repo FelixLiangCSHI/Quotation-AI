@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from app.auth.local_provider import LocalPasswordAuthenticationProvider
+from app.auth.local_provider import (
+    AccountLockedError,
+    LocalPasswordAuthenticationProvider,
+)
 from app.auth.passwords import (
     WeakPasswordError,
     hash_password,
@@ -36,6 +39,7 @@ __all__ = [
     "AuthenticationError",
     "AuthenticationProvider",
     "EnterpriseSsoAuthenticationProvider",
+    "AccountLockedError",
     "LocalPasswordAuthenticationProvider",
     "Permission",
     "PermissionDeniedError",

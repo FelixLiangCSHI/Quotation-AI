@@ -91,10 +91,21 @@ class LocalWorkbookStorage:
             return False
 
     def _path_for(self, uri: str) -> Path:
+        """Resolve a storage URI, refusing anything outside the root."""
+
         prefix = f"{self.scheme}://"
         if not uri.startswith(prefix):
             raise WorkbookStorageError(f"Unsupported storage URI: {uri!r}")
-        return Path(uri[len(prefix) :])
+        candidate = Path(uri[len(prefix) :])
+        root = self._root.resolve()
+        resolved = (
+            candidate if candidate.is_absolute() else root / candidate
+        ).resolve()
+        if resolved != root and root not in resolved.parents:
+            raise WorkbookStorageError(
+                "The storage URI points outside the configured upload root."
+            )
+        return resolved
 
 
 class InMemoryWorkbookStorage:

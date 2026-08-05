@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+import os
+import threading
+from collections import defaultdict
+from datetime import datetime, timedelta
 
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -16,6 +19,16 @@ from app.auth.provider import (
 from app.auth.roles import Role, UnknownRoleError, parse_roles
 from app.quotation_models import utc_now
 from app.services.unit_of_work import UnitOfWork
+
+
+#: Failed sign-in attempts tolerated inside :data:`DEFAULT_LOCKOUT_WINDOW`
+#: before an account is temporarily locked.
+DEFAULT_MAX_FAILED_LOGINS = 5
+DEFAULT_LOCKOUT_WINDOW = timedelta(minutes=15)
+
+
+class AccountLockedError(AuthenticationError):
+    """Raised when too many failed sign-in attempts were made."""
 
 
 class LocalPasswordAuthenticationProvider:
@@ -33,9 +46,47 @@ class LocalPasswordAuthenticationProvider:
         session_factory: sessionmaker[Session] | None = None,
         *,
         session_lifetime: timedelta = DEFAULT_SESSION_LIFETIME,
+        max_failed_logins: int | None = None,
+        lockout_window: timedelta = DEFAULT_LOCKOUT_WINDOW,
     ) -> None:
         self._session_factory = session_factory
         self._session_lifetime = session_lifetime
+        self._max_failed_logins = (
+            _configured_max_failed_logins()
+            if max_failed_logins is None
+            else max_failed_logins
+        )
+        self._lockout_window = lockout_window
+        self._failures: dict[str, list[datetime]] = defaultdict(list)
+        self._failure_lock = threading.Lock()
+
+    # -- throttling ----------------------------------------------------
+
+    def _recent_failures(self, key: str, now: datetime) -> int:
+        cutoff = now - self._lockout_window
+        attempts = [moment for moment in self._failures[key] if moment > cutoff]
+        self._failures[key] = attempts
+        return len(attempts)
+
+    def _assert_not_locked(self, key: str, now: datetime) -> None:
+        if self._max_failed_logins <= 0:
+            return
+        with self._failure_lock:
+            if self._recent_failures(key, now) >= self._max_failed_logins:
+                raise AccountLockedError(
+                    "Too many failed sign-in attempts. Wait for the lockout "
+                    "window to pass, or ask an administrator to reset the "
+                    "account."
+                )
+
+    def _record_failure(self, key: str, now: datetime) -> None:
+        with self._failure_lock:
+            self._recent_failures(key, now)
+            self._failures[key].append(now)
+
+    def _clear_failures(self, key: str) -> None:
+        with self._failure_lock:
+            self._failures.pop(key, None)
 
     def _unit_of_work(self) -> UnitOfWork:
         return UnitOfWork(self._session_factory)
@@ -111,6 +162,7 @@ class LocalPasswordAuthenticationProvider:
         normalized = (username or "").strip().casefold()
         now = utc_now()
         expires_at = now + self._session_lifetime
+        self._assert_not_locked(normalized, now)
 
         with self._unit_of_work() as uow:
             record = uow.users.get_credential(normalized)
@@ -121,8 +173,11 @@ class LocalPasswordAuthenticationProvider:
                 or not record.is_active
                 or not verify_password(password or "", record.password_hash)
             ):
+                self._record_failure(normalized, now)
+                # The submitted password is never logged or stored.
                 raise AuthenticationError("Invalid username or password.")
 
+            self._clear_failures(normalized)
             roles = parse_roles(record.roles or ())
             token = new_session_token()
             uow.users.create_session(
@@ -188,3 +243,17 @@ class LocalPasswordAuthenticationProvider:
 
         with self._unit_of_work() as uow:
             return bool(uow.users.list_users(only_active=False))
+
+
+def _configured_max_failed_logins(
+    environment: "dict[str, str] | None" = None,
+) -> int:
+    values = os.environ if environment is None else environment
+    raw = (values.get("AUTH_MAX_FAILED_LOGINS") or "").strip()
+    if not raw:
+        return DEFAULT_MAX_FAILED_LOGINS
+    try:
+        parsed = int(raw)
+    except ValueError as error:
+        raise ValueError("AUTH_MAX_FAILED_LOGINS must be an integer") from error
+    return max(0, parsed)

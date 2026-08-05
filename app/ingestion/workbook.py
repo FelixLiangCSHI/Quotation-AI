@@ -115,7 +115,7 @@ def validate_workbook_file(
             f"{name!r} is not a readable Office Open XML workbook."
         )
 
-    _assert_openable(name, payload)
+    _assert_openable(name, payload, resolved)
 
     return WorkbookFile(
         filename=name,
@@ -127,16 +127,19 @@ def validate_workbook_file(
     )
 
 
-def _assert_openable(name: str, payload: bytes) -> None:
+def _assert_openable(name: str, payload: bytes, config: IngestionConfig) -> None:
     import io
 
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            entries = set(archive.namelist())
+            infos = archive.infolist()
+            entries = {info.filename for info in infos}
     except (zipfile.BadZipFile, OSError) as error:
         raise CorruptWorkbookError(
             f"{name!r} could not be opened as a workbook."
         ) from error
+
+    _assert_not_a_zip_bomb(name, infos, len(payload), config)
 
     if "EncryptionInfo" in entries or "EncryptedPackage" in entries:
         raise ProtectedWorkbookError(
@@ -146,6 +149,49 @@ def _assert_openable(name: str, payload: bytes) -> None:
         raise CorruptWorkbookError(
             f"{name!r} does not contain a spreadsheet part."
         )
+
+
+def _assert_not_a_zip_bomb(
+    name: str,
+    infos: list["zipfile.ZipInfo"],
+    compressed_size: int,
+    config: IngestionConfig,
+) -> None:
+    """Refuse archives that would expand far beyond the configured caps.
+
+    An .xlsx file is a ZIP archive, so a small upload can declare gigabytes of
+    uncompressed content. The declared sizes are checked before anything is
+    read, and no entry is ever extracted to disk.
+    """
+
+    if len(infos) > config.max_archive_entries:
+        raise UnsupportedWorkbookError(
+            f"{name!r} contains too many internal parts to be a valid "
+            "pricing workbook."
+        )
+
+    uncompressed = 0
+    for info in infos:
+        entry = info.filename
+        if entry.startswith("/") or ".." in Path(entry).parts or ":" in entry:
+            raise UnsupportedWorkbookError(
+                f"{name!r} contains an unsafe internal path and was rejected."
+            )
+        uncompressed += max(0, int(info.file_size))
+        if uncompressed > config.max_uncompressed_bytes:
+            limit_mb = config.max_uncompressed_bytes / (1024 * 1024)
+            raise UnsupportedWorkbookError(
+                f"{name!r} expands beyond the {limit_mb:.0f} MB decompression "
+                "limit and was rejected."
+            )
+
+    if compressed_size > 0:
+        ratio = uncompressed / compressed_size
+        if ratio > config.max_compression_ratio:
+            raise UnsupportedWorkbookError(
+                f"{name!r} has an implausible compression ratio and was "
+                "rejected as a possible decompression bomb."
+            )
 
 
 def _load_workbook(workbook_file: WorkbookFile):
@@ -186,6 +232,7 @@ def read_sheet(
     *,
     header_row: int | None = None,
     max_rows: int | None = None,
+    config: IngestionConfig | None = None,
 ) -> SheetPreview:
     """Read a sheet's header and data rows.
 
@@ -200,7 +247,15 @@ def read_sheet(
                 f"Sheet {sheet_name!r} is not present in the workbook."
             )
         worksheet = workbook[sheet_name]
-        rows = [tuple(row) for row in worksheet.iter_rows(values_only=True)]
+        row_cap = (config or load_ingestion_config()).max_sheet_rows
+        rows = []
+        for row in worksheet.iter_rows(values_only=True):
+            rows.append(tuple(row))
+            if len(rows) > row_cap:
+                raise UnsupportedWorkbookError(
+                    f"Sheet {sheet_name!r} exceeds the {row_cap} row limit "
+                    "for a single pricing sheet."
+                )
     finally:
         workbook.close()
 
