@@ -96,16 +96,16 @@ For a demo or a walkthrough, one account per role can be seeded in a single
 step instead of creating each account by hand:
 
 ```bash
+export QUOTATION_DEMO_PASSWORD='choose-a-demo-password'
 python -m app.auth.demo_accounts
 ```
 
 This creates `demo.admin`, `demo.sales`, `demo.salesmanager` and
-`demo.pricingmanager`. Passwords are taken from `QUOTATION_DEMO_PASSWORD` when
-it is set, otherwise a random password per account is generated and printed
-once — record it, because passwords are hashed and cannot be shown again.
-Re-running is safe: an existing account is left untouched, including its
-password. These accounts are for demo and pilot environments only; do not seed
-them into a production deployment.
+`demo.pricingmanager`, all sharing the password in `QUOTATION_DEMO_PASSWORD`.
+The command refuses to run when that variable is unset, and it never prints or
+stores the password in clear text. Re-running is safe: an existing account is
+left untouched, including its password. These accounts are for demo and pilot
+environments only; do not seed them into a production deployment.
 
 ## Health checks
 

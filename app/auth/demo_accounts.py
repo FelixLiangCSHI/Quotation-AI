@@ -1,12 +1,12 @@
 """Seed one account per role so a demo can be run immediately.
 
-Credentials are never hard-coded. Every password is either taken from the
-environment (``QUOTATION_DEMO_PASSWORD``) or randomly generated and returned
-once so the presenter can record it. Nothing is stored in clear text: the
-provider hashes the password before it reaches the database.
+Credentials are never hard-coded. The command line requires the password to be
+supplied through ``QUOTATION_DEMO_PASSWORD`` and never prints it; the provider
+hashes it before it reaches the database.
 
 Run it with::
 
+    export QUOTATION_DEMO_PASSWORD='...'
     python -m app.auth.demo_accounts
 """
 
@@ -15,14 +15,16 @@ from __future__ import annotations
 import argparse
 import os
 import secrets
+import sys
 from dataclasses import dataclass
 
 from app.auth.local_provider import LocalPasswordAuthenticationProvider
 from app.auth.provider import AuthenticationError
 from app.auth.roles import Role
 
-#: Optional shared password for every demo account. When it is absent a
-#: separate random password is generated per account.
+#: Shared password for every demo account, read from the environment. When it
+#: is absent a separate random password is generated per account; the command
+#: line refuses to run in that case so no password is ever printed.
 DEMO_PASSWORD_ENV = "QUOTATION_DEMO_PASSWORD"
 
 #: Username and role of each seeded demo account.
@@ -41,8 +43,8 @@ class SeededAccount:
     username: str
     role: Role
     created: bool
-    #: Only populated for an account this call created, so it can be shown
-    #: once to the presenter.
+    #: Only populated for an account this call created, so a caller can hand
+    #: it over out of band. Never printed by the command line.
     password: str | None = None
 
 
@@ -93,29 +95,31 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI entry
     parser = argparse.ArgumentParser(
         prog="python -m app.auth.demo_accounts",
         description=(
-            "Create one demo account per role. Passwords come from "
-            f"{DEMO_PASSWORD_ENV} or are generated and printed once."
+            "Create one demo account per role. The shared password is read "
+            f"from {DEMO_PASSWORD_ENV} and is never printed or stored in "
+            "clear text."
         ),
     )
     parser.parse_args(argv)
+
+    if not os.getenv(DEMO_PASSWORD_ENV, "").strip():
+        print(
+            f"Set {DEMO_PASSWORD_ENV} to the password the demo accounts "
+            "should share, then run this command again. The value is never "
+            "printed or stored in clear text.",
+            file=sys.stderr,
+        )
+        return 2
 
     _ensure_schema()
     accounts = seed_demo_accounts()
     print("Demo accounts:")
     for account in accounts:
-        if account.created:
-            print(
-                f"  {account.username:22} {account.role.value:16} "
-                f"password: {account.password}"
-            )
-        else:
-            print(
-                f"  {account.username:22} {account.role.value:16} "
-                "already exists (password unchanged)"
-            )
+        state = "created" if account.created else "already exists (unchanged)"
+        print(f"  {account.username:22} {account.role.value:16} {state}")
     print(
-        "\nRecord these credentials now; passwords are hashed and cannot be "
-        "shown again."
+        f"\nSign in with the username above and the value of "
+        f"{DEMO_PASSWORD_ENV}."
     )
     return 0
 
