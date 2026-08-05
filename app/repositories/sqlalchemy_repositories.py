@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from uuid import uuid4
 from typing import Any
 
 from sqlalchemy import select
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.db import models
 from app.domain.dto import (
+    ApprovalTaskDTO,
     AuditEventDTO,
     LineItemDTO,
     LineItemType,
@@ -28,6 +30,7 @@ from app.repositories.interfaces import (
     DuplicateApprovalActionError,
     QuotationNotFoundError,
     QuotationVersionConflictError,
+    RepositoryError,
 )
 
 #: Quotation columns a service may update through ``update(fields=...)``.
@@ -67,12 +70,18 @@ class SqlAlchemyUserRepository:
         display_name: str = "",
         email: str = "",
         roles: tuple[str, ...] = (),
+        password_hash: str = "",
+        auth_provider: str = "local",
+        external_subject: str = "",
     ) -> UserDTO:
         record = models.User(
             username=username,
             display_name=display_name or username,
             email=email,
             roles=list(roles),
+            password_hash=password_hash,
+            auth_provider=auth_provider,
+            external_subject=external_subject,
         )
         self._session.add(record)
         self._session.flush()
@@ -87,6 +96,80 @@ class SqlAlchemyUserRepository:
     def get(self, user_id: int) -> UserDTO | None:
         record = self._session.get(models.User, user_id)
         return _user_dto(record) if record is not None else None
+
+    def get_credential(self, username: str) -> models.User | None:
+        """Return the ORM row. Used only by the authentication provider."""
+
+        return self._session.scalars(
+            select(models.User).where(models.User.username == username)
+        ).one_or_none()
+
+    def list_users(self, *, only_active: bool = True) -> tuple[UserDTO, ...]:
+        statement = select(models.User).order_by(models.User.id)
+        if only_active:
+            statement = statement.where(models.User.is_active.is_(True))
+        return tuple(
+            _user_dto(record) for record in self._session.scalars(statement)
+        )
+
+    def list_by_role(self, role: str) -> tuple[UserDTO, ...]:
+        return tuple(
+            user
+            for user in self.list_users(only_active=True)
+            if role in user.roles
+        )
+
+    def set_password_hash(self, *, user_id: int, password_hash: str) -> None:
+        record = self._session.get(models.User, user_id)
+        if record is None:
+            raise RepositoryError(f"Unknown user: {user_id}")
+        record.password_hash = password_hash
+        self._session.flush()
+
+    def set_roles(self, *, user_id: int, roles: tuple[str, ...]) -> UserDTO:
+        record = self._session.get(models.User, user_id)
+        if record is None:
+            raise RepositoryError(f"Unknown user: {user_id}")
+        record.roles = list(roles)
+        self._session.flush()
+        return _user_dto(record)
+
+    def record_login(self, *, user_id: int, moment: datetime) -> None:
+        record = self._session.get(models.User, user_id)
+        if record is not None:
+            record.last_login_at = moment
+            self._session.flush()
+
+    # -- authenticated sessions ----------------------------------------
+
+    def create_session(
+        self,
+        *,
+        user_id: int,
+        token: str,
+        issued_at: datetime,
+        expires_at: datetime,
+    ) -> int:
+        record = models.UserSession(
+            token=token,
+            user_id=user_id,
+            issued_at=issued_at,
+            expires_at=expires_at,
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record.id
+
+    def get_session(self, token: str) -> models.UserSession | None:
+        return self._session.scalars(
+            select(models.UserSession).where(models.UserSession.token == token)
+        ).one_or_none()
+
+    def revoke_session(self, token: str, *, moment: datetime) -> None:
+        record = self.get_session(token)
+        if record is not None and record.revoked_at is None:
+            record.revoked_at = moment
+            self._session.flush()
 
 
 class SqlAlchemyQuotationRepository:
@@ -282,6 +365,10 @@ class SqlAlchemyAuditEventRepository:
         triggered_rule_ids: tuple[str, ...] = (),
         details: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
+        actor_role: str = "",
+        quotation_version: int = 0,
+        policy_version_id: str = "",
+        request_id: str = "",
     ) -> AuditEventDTO:
         normalized_type = event_type.strip()
         normalized_actor = actor.strip()
@@ -301,7 +388,13 @@ class SqlAlchemyAuditEventRepository:
             quotation_reference=quotation_id,
             event_type=normalized_type,
             actor=normalized_actor,
+            actor_role=actor_role,
             actor_user_id=actor_user_id,
+            quotation_version=quotation_version or (
+                parent.version if parent is not None else 0
+            ),
+            policy_version_id=policy_version_id,
+            request_id=request_id,
             before_state=before_state,
             after_state=after_state,
             changed_fields=list(changed_fields),
@@ -313,6 +406,17 @@ class SqlAlchemyAuditEventRepository:
         self._session.add(record)
         self._session.flush()
         return _audit_dto(record)
+
+    def list_recent(self, *, limit: int = 200) -> tuple[AuditEventDTO, ...]:
+        statement = (
+            select(models.AuditEventRecord)
+            .order_by(models.AuditEventRecord.id.desc())
+            .limit(limit)
+        )
+        return tuple(
+            _audit_dto(record)
+            for record in reversed(list(self._session.scalars(statement)))
+        )
 
     def list_for_quotation(self, quotation_id: str) -> tuple[AuditEventDTO, ...]:
         statement = (
@@ -341,6 +445,14 @@ class SqlAlchemyApprovalRepository:
         assigned_user_id: int | None = None,
         due_at: datetime | None = None,
         reminder_due_at: datetime | None = None,
+        task_reference: str = "",
+        quotation_version: int = 0,
+        decision_status: str = "",
+        submitted_by_user_id: int | None = None,
+        submitted_at: datetime | None = None,
+        policy_version_id: str = "",
+        pricing_run_id: str = "",
+        validation_run_id: str = "",
     ) -> int:
         parent = self._session.scalars(
             select(models.Quotation).where(
@@ -356,12 +468,21 @@ class SqlAlchemyApprovalRepository:
 
         record = models.ApprovalTask(
             quotation_id=parent.id,
+            quotation_reference=quotation_id,
+            task_reference=task_reference or f"TASK-{uuid4().hex[:12].upper()}",
+            quotation_version=quotation_version or parent.version,
+            decision_status=decision_status,
             assigned_user_id=assigned_user_id,
             assigned_approver_name=assigned_approver_name,
             assigned_approver_role=assigned_approver_role,
+            submitted_by_user_id=submitted_by_user_id,
+            submitted_at=submitted_at or utc_now(),
             status="pending_review",
             due_at=due_at,
             reminder_due_at=reminder_due_at,
+            policy_version_id=policy_version_id,
+            pricing_run_id=pricing_run_id,
+            validation_run_id=validation_run_id,
         )
         self._session.add(record)
         self._session.flush()
@@ -379,6 +500,90 @@ class SqlAlchemyApprovalRepository:
         ).first()
         return record.id if record is not None else None
 
+    def get_task(self, task_id: int) -> ApprovalTaskDTO | None:
+        record = self._session.get(models.ApprovalTask, task_id)
+        return _approval_task_dto(record) if record is not None else None
+
+    def get_open_task(self, quotation_id: str) -> ApprovalTaskDTO | None:
+        task_id = self.get_open_task_id(quotation_id)
+        return None if task_id is None else self.get_task(task_id)
+
+    def lock_open_task(self, quotation_id: str) -> models.ApprovalTask | None:
+        """Read the open task inside the current transaction for update.
+
+        The row lock makes two concurrent approval attempts serialise, so the
+        second observes the completed status instead of racing it.
+        """
+
+        statement = (
+            select(models.ApprovalTask)
+            .join(models.Quotation)
+            .where(
+                models.Quotation.quotation_id == quotation_id,
+                models.ApprovalTask.status.in_(self.OPEN_STATUSES),
+            )
+            .order_by(models.ApprovalTask.id.desc())
+        )
+        if self._session.bind is not None and self._session.bind.dialect.name != "sqlite":
+            statement = statement.with_for_update()
+        return self._session.scalars(statement).first()
+
+    def list_tasks(
+        self,
+        *,
+        assigned_user_id: int | None = None,
+        statuses: tuple[str, ...] = (),
+        quotation_id: str | None = None,
+    ) -> tuple[ApprovalTaskDTO, ...]:
+        statement = select(models.ApprovalTask)
+        if assigned_user_id is not None:
+            statement = statement.where(
+                models.ApprovalTask.assigned_user_id == assigned_user_id
+            )
+        if statuses:
+            statement = statement.where(
+                models.ApprovalTask.status.in_(statuses)
+            )
+        if quotation_id is not None:
+            statement = statement.where(
+                models.ApprovalTask.quotation_reference == quotation_id
+            )
+        statement = statement.order_by(models.ApprovalTask.id)
+        return tuple(
+            _approval_task_dto(record)
+            for record in self._session.scalars(statement)
+        )
+
+    def cancel_open_tasks(
+        self,
+        *,
+        quotation_id: str,
+        reason: str = "",
+        moment: datetime | None = None,
+    ) -> tuple[int, ...]:
+        """Mark every open task on a quotation as ``cancelled_stale``."""
+
+        timestamp = moment or utc_now()
+        records = self._session.scalars(
+            select(models.ApprovalTask)
+            .join(models.Quotation)
+            .where(
+                models.Quotation.quotation_id == quotation_id,
+                models.ApprovalTask.status.in_(self.OPEN_STATUSES),
+            )
+        ).all()
+        cancelled: list[int] = []
+        for record in records:
+            record.status = "cancelled_stale"
+            record.decision = "cancelled_stale"
+            record.reason = reason
+            record.completed_at = timestamp
+            record.decided_at = timestamp
+            cancelled.append(record.id)
+        if cancelled:
+            self._session.flush()
+        return tuple(cancelled)
+
     def record_action(
         self,
         *,
@@ -395,6 +600,7 @@ class SqlAlchemyApprovalRepository:
         final_unit_price: Any | None = None,
         triggered_rule_ids: tuple[str, ...] = (),
         occurred_at: datetime | None = None,
+        quotation_version: int = 0,
     ) -> int:
         task = self._session.get(models.ApprovalTask, task_id)
         if task is None:
@@ -415,6 +621,7 @@ class SqlAlchemyApprovalRepository:
             final_unit_price=_to_decimal(final_unit_price),
             triggered_rule_ids=list(triggered_rule_ids),
             occurred_at=timestamp,
+            quotation_version=quotation_version or task.quotation_version,
         )
         self._session.add(record)
         try:
@@ -428,11 +635,73 @@ class SqlAlchemyApprovalRepository:
         task.decision = action
         task.reason = reason
         task.decided_at = timestamp
+        task.completed_at = timestamp
+        self._session.flush()
+        return record.id
+
+    def record_override(
+        self,
+        *,
+        task_id: int,
+        approval_action_id: int | None,
+        original_decision: str,
+        evaluated_margin_percent: str,
+        policy_threshold_percent: str,
+        policy_version_id: str,
+        approver_name: str,
+        approver_role: str,
+        justification: str,
+        approver_user_id: int | None = None,
+        final_approved_price: Any | None = None,
+        final_margin_percent: str = "",
+        triggered_rule_ids: tuple[str, ...] = (),
+        occurred_at: datetime | None = None,
+    ) -> int:
+        record = models.ApprovalOverrideRecord(
+            approval_task_id=task_id,
+            approval_action_id=approval_action_id,
+            original_decision=original_decision,
+            evaluated_margin_percent=evaluated_margin_percent,
+            policy_threshold_percent=policy_threshold_percent,
+            policy_version_id=policy_version_id,
+            approver_user_id=approver_user_id,
+            approver_name=approver_name,
+            approver_role=approver_role,
+            justification=justification,
+            final_approved_price=_to_decimal(final_approved_price),
+            final_margin_percent=final_margin_percent,
+            triggered_rule_ids=list(triggered_rule_ids),
+            occurred_at=occurred_at or utc_now(),
+        )
+        self._session.add(record)
         self._session.flush()
         return record.id
 
 
 # -- ORM to DTO mapping ------------------------------------------------
+
+
+def _approval_task_dto(record: models.ApprovalTask) -> ApprovalTaskDTO:
+    return ApprovalTaskDTO(
+        id=record.id,
+        task_reference=record.task_reference,
+        quotation_reference=record.quotation_reference,
+        quotation_version=record.quotation_version,
+        decision_status=record.decision_status,
+        status=record.status,
+        assigned_user_id=record.assigned_user_id,
+        assigned_approver_name=record.assigned_approver_name,
+        assigned_approver_role=record.assigned_approver_role,
+        submitted_by_user_id=record.submitted_by_user_id,
+        submitted_at=record.submitted_at,
+        reminder_due_at=record.reminder_due_at,
+        completed_at=record.completed_at,
+        policy_version_id=record.policy_version_id,
+        pricing_run_id=record.pricing_run_id,
+        validation_run_id=record.validation_run_id,
+        decision=record.decision,
+        reason=record.reason,
+    )
 
 
 def _user_dto(record: models.User) -> UserDTO:
@@ -476,6 +745,10 @@ def _audit_dto(record: models.AuditEventRecord) -> AuditEventDTO:
         reason=record.reason,
         triggered_rule_ids=tuple(record.triggered_rule_ids or ()),
         details=dict(record.details or {}),
+        actor_role=record.actor_role,
+        quotation_version=record.quotation_version,
+        policy_version_id=record.policy_version_id,
+        request_id=record.request_id,
     )
 
 

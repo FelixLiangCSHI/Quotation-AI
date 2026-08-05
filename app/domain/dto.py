@@ -126,6 +126,38 @@ class AuditEventDTO:
     reason: str = ""
     triggered_rule_ids: tuple[str, ...] = ()
     details: dict[str, Any] = field(default_factory=dict)
+    actor_role: str = ""
+    quotation_version: int = 0
+    policy_version_id: str = ""
+    request_id: str = ""
+
+
+@dataclass(frozen=True)
+class ApprovalTaskDTO:
+    """A persistent approval task as exposed to services and the UI."""
+
+    id: int
+    task_reference: str
+    quotation_reference: str
+    quotation_version: int
+    decision_status: str
+    status: str
+    assigned_user_id: int | None = None
+    assigned_approver_name: str = ""
+    assigned_approver_role: str = ""
+    submitted_by_user_id: int | None = None
+    submitted_at: datetime | None = None
+    reminder_due_at: datetime | None = None
+    completed_at: datetime | None = None
+    policy_version_id: str = ""
+    pricing_run_id: str = ""
+    validation_run_id: str = ""
+    decision: str = ""
+    reason: str = ""
+
+    @property
+    def is_open(self) -> bool:
+        return self.status == "pending_review"
 
 
 @dataclass(frozen=True)

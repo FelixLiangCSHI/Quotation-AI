@@ -1,0 +1,172 @@
+"""Local password authentication backed by the internal user table."""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.auth.passwords import hash_password, verify_password
+from app.auth.provider import (
+    DEFAULT_SESSION_LIFETIME,
+    AuthenticatedUser,
+    AuthenticationError,
+    new_session_token,
+)
+from app.auth.roles import Role, UnknownRoleError, parse_roles
+from app.quotation_models import utc_now
+from app.services.unit_of_work import UnitOfWork
+
+
+class LocalPasswordAuthenticationProvider:
+    """Authenticates locally managed accounts and issues persistent sessions.
+
+    Sessions are rows in ``user_sessions``, so an approver signing in from a
+    separate browser session sees the same persistent workflow, and a session
+    survives an application restart until it expires or is revoked.
+    """
+
+    provider_name = "local"
+
+    def __init__(
+        self,
+        session_factory: sessionmaker[Session] | None = None,
+        *,
+        session_lifetime: timedelta = DEFAULT_SESSION_LIFETIME,
+    ) -> None:
+        self._session_factory = session_factory
+        self._session_lifetime = session_lifetime
+
+    def _unit_of_work(self) -> UnitOfWork:
+        return UnitOfWork(self._session_factory)
+
+    # -- account management -------------------------------------------
+
+    def create_user(
+        self,
+        *,
+        username: str,
+        password: str,
+        roles: tuple[Role | str, ...],
+        display_name: str = "",
+        email: str = "",
+    ) -> AuthenticatedUser:
+        """Create a local account with an explicitly assigned role set.
+
+        ``roles`` must resolve to known :class:`Role` members, so a user can
+        never be given a privileged role through free text.
+        """
+
+        resolved = parse_roles(roles)
+        if not resolved:
+            raise UnknownRoleError("At least one known role is required.")
+        normalized = username.strip().casefold()
+        if not normalized:
+            raise AuthenticationError("A username is required.")
+
+        with self._unit_of_work() as uow:
+            if uow.users.get_by_username(normalized) is not None:
+                raise AuthenticationError(
+                    f"User {normalized!r} already exists."
+                )
+            created = uow.users.add(
+                username=normalized,
+                display_name=display_name or username.strip(),
+                email=email,
+                roles=tuple(role.value for role in resolved),
+                password_hash=hash_password(password),
+                auth_provider=self.provider_name,
+            )
+            uow.commit()
+
+        return AuthenticatedUser(
+            user_id=created.id,
+            username=created.username,
+            display_name=created.display_name,
+            roles=resolved,
+        )
+
+    def set_roles(
+        self, *, user_id: int, roles: tuple[Role | str, ...]
+    ) -> AuthenticatedUser:
+        resolved = parse_roles(roles)
+        if not resolved:
+            raise UnknownRoleError("At least one known role is required.")
+        with self._unit_of_work() as uow:
+            record = uow.users.set_roles(
+                user_id=user_id,
+                roles=tuple(role.value for role in resolved),
+            )
+            uow.commit()
+        return AuthenticatedUser(
+            user_id=record.id,
+            username=record.username,
+            display_name=record.display_name,
+            roles=resolved,
+        )
+
+    # -- authentication ------------------------------------------------
+
+    def authenticate(self, username: str, password: str) -> AuthenticatedUser:
+        normalized = (username or "").strip().casefold()
+        now = utc_now()
+        expires_at = now + self._session_lifetime
+
+        with self._unit_of_work() as uow:
+            record = uow.users.get_credential(normalized)
+            # The same message is used for an unknown user and a bad password
+            # so the response does not disclose which accounts exist.
+            if (
+                record is None
+                or not record.is_active
+                or not verify_password(password or "", record.password_hash)
+            ):
+                raise AuthenticationError("Invalid username or password.")
+
+            roles = parse_roles(record.roles or ())
+            token = new_session_token()
+            uow.users.create_session(
+                user_id=record.id,
+                token=token,
+                issued_at=now,
+                expires_at=expires_at,
+            )
+            uow.users.record_login(user_id=record.id, moment=now)
+            principal = AuthenticatedUser(
+                user_id=record.id,
+                username=record.username,
+                display_name=record.display_name,
+                roles=roles,
+                session_token=token,
+                expires_at=expires_at,
+            )
+            uow.commit()
+        return principal
+
+    def resolve_session(self, token: str) -> AuthenticatedUser | None:
+        if not token:
+            return None
+        with self._unit_of_work() as uow:
+            record = uow.users.get_session(token)
+            if record is None or record.revoked_at is not None:
+                return None
+            if record.expires_at <= utc_now():
+                return None
+            user = record.user
+            if user is None or not user.is_active:
+                return None
+            return AuthenticatedUser(
+                user_id=user.id,
+                username=user.username,
+                display_name=user.display_name,
+                roles=parse_roles(user.roles or ()),
+                session_token=token,
+                expires_at=record.expires_at,
+            )
+
+    def end_session(self, token: str) -> None:
+        if not token:
+            return
+        with self._unit_of_work() as uow:
+            uow.users.revoke_session(token, moment=utc_now())
+            uow.commit()

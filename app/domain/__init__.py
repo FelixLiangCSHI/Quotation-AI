@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from app.domain.dto import (
     PRODUCT_LINE_ITEM_TYPES,
+    ApprovalTaskDTO,
     AuditEventDTO,
     LineItemDTO,
     LineItemType,
@@ -21,6 +22,7 @@ from app.domain.workflow_state_codec import (
 __all__ = [
     "PRODUCT_LINE_ITEM_TYPES",
     "STATE_SCHEMA_VERSION",
+    "ApprovalTaskDTO",
     "AuditEventDTO",
     "LineItemDTO",
     "LineItemType",

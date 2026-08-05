@@ -18,6 +18,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_TABLES = {
     "approval_actions",
+    "approval_overrides",
     "approval_tasks",
     "audit_events",
     "column_mapping_profiles",
@@ -32,6 +33,7 @@ EXPECTED_TABLES = {
     "quotation_line_items",
     "quotations",
     "technical_validation_runs",
+    "user_sessions",
     "users",
 }
 

@@ -32,7 +32,13 @@ PERCENT = Numeric(9, 4)
 
 
 class User(Base, TimestampMixin):
-    """An internal user. Authentication itself arrives in a later phase."""
+    """An internal user account with locally managed credentials.
+
+    ``password_hash`` stores only a PBKDF2 digest; no password or secret is
+    ever persisted in clear text. ``auth_provider`` records which
+    authentication source owns the account so a future enterprise SSO provider
+    can coexist with local accounts.
+    """
 
     __tablename__ = "users"
 
@@ -44,11 +50,54 @@ class User(Base, TimestampMixin):
         JSONDocument, nullable=False, default=list
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    password_hash: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    auth_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="local"
+    )
+    external_subject: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
 
     owned_quotations: Mapped[list["Quotation"]] = relationship(
         back_populates="owner",
         foreign_keys="Quotation.owner_user_id",
     )
+    sessions: Mapped[list["UserSession"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class UserSession(Base, TimestampMixin):
+    """A persistent authenticated session.
+
+    The token is a high-entropy random value; it is a credential, so it is
+    never written to an audit record.
+    """
+
+    __tablename__ = "user_sessions"
+    __table_args__ = (Index("ix_user_sessions_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    issued_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class PricingDataVersion(Base, TimestampMixin):
@@ -472,8 +521,20 @@ class ApprovalTask(Base, TimestampMixin):
     __table_args__ = (Index("ix_approval_tasks_status", "status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True
+    )
     quotation_id: Mapped[int] = mapped_column(
         ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    quotation_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1
+    )
+    decision_status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
     )
     assigned_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -483,6 +544,12 @@ class ApprovalTask(Base, TimestampMixin):
     )
     assigned_approver_role: Mapped[str] = mapped_column(
         String(100), nullable=False, default=""
+    )
+    submitted_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
     )
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="pending_review"
@@ -494,12 +561,29 @@ class ApprovalTask(Base, TimestampMixin):
         UTCDateTime, nullable=True
     )
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=""
+    )
+    pricing_run_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    validation_run_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
 
     quotation: Mapped[Quotation] = relationship(back_populates="approval_tasks")
     actions: Mapped[list["ApprovalAction"]] = relationship(
         back_populates="task",
         cascade="all, delete-orphan",
         order_by="ApprovalAction.id",
+    )
+    overrides: Mapped[list["ApprovalOverrideRecord"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="ApprovalOverrideRecord.id",
     )
 
 
@@ -536,9 +620,60 @@ class ApprovalAction(Base, TimestampMixin):
     triggered_rule_ids: Mapped[list[str]] = mapped_column(
         JSONDocument, nullable=False, default=list
     )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     occurred_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     task: Mapped[ApprovalTask] = relationship(back_populates="actions")
+
+
+class ApprovalOverrideRecord(Base, TimestampMixin):
+    """The documented justification for an approval below policy threshold."""
+
+    __tablename__ = "approval_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approval_task_id: Mapped[int] = mapped_column(
+        ForeignKey("approval_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    approval_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_actions.id", ondelete="SET NULL"), nullable=True
+    )
+    original_decision: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    evaluated_margin_percent: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    policy_threshold_percent: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=""
+    )
+    approver_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approver_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    approver_role: Mapped[str] = mapped_column(
+        String(100), nullable=False, default=""
+    )
+    justification: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    final_approved_price: Mapped[Any | None] = mapped_column(MONEY, nullable=True)
+    final_margin_percent: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    triggered_rule_ids: Mapped[list[str]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    task: Mapped[ApprovalTask] = relationship(back_populates="overrides")
 
 
 class AuditEventRecord(Base):
@@ -556,8 +691,20 @@ class AuditEventRecord(Base):
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     actor: Mapped[str] = mapped_column(String(200), nullable=False, default="system")
+    actor_role: Mapped[str] = mapped_column(
+        String(100), nullable=False, default=""
+    )
     actor_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=""
+    )
+    request_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
     )
     before_state: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     after_state: Mapped[str] = mapped_column(String(50), nullable=False, default="")
