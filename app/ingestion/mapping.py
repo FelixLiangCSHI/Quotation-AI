@@ -36,6 +36,10 @@ class ColumnMappingProfile:
     header_row: int = 1
     #: canonical field name -> workbook header text
     field_to_header: Mapping[str, str] = field(default_factory=dict)
+    #: canonical field name -> constant value applied to every row.
+    #: Used when an export omits a column that is constant for the whole
+    #: file (for example an archived SAP price list with a single currency).
+    constant_values: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def schema(self) -> CanonicalSchema:
@@ -43,24 +47,38 @@ class ColumnMappingProfile:
 
     @property
     def mapped_fields(self) -> tuple[str, ...]:
-        return tuple(sorted(self.field_to_header))
+        return tuple(sorted(set(self.field_to_header) | set(self.constant_values)))
 
     def missing_required_fields(self) -> tuple[str, ...]:
-        mapped = set(self.field_to_header)
-        return tuple(
+        supplied = {
             name
-            for name in self.schema.required_fields
-            if name not in mapped or not str(self.field_to_header[name]).strip()
+            for name, header in self.field_to_header.items()
+            if str(header).strip()
+        } | {
+            name
+            for name, value in self.constant_values.items()
+            if str(value).strip()
+        }
+        return tuple(
+            name for name in self.schema.required_fields if name not in supplied
         )
 
     def validate(self) -> None:
         schema = self.schema
         known = set(schema.field_names)
-        unknown = sorted(set(self.field_to_header) - known)
+        unknown = sorted(
+            (set(self.field_to_header) | set(self.constant_values)) - known
+        )
         if unknown:
             raise MappingError(
                 f"Unknown canonical field(s) for {schema.title}: "
                 + ", ".join(unknown)
+            )
+        conflicting = sorted(set(self.field_to_header) & set(self.constant_values))
+        if conflicting:
+            raise MappingError(
+                "A field cannot be both mapped to a column and given a "
+                "constant value: " + ", ".join(conflicting)
             )
         duplicates = _duplicate_headers(self.field_to_header)
         if duplicates:
@@ -82,6 +100,7 @@ class ColumnMappingProfile:
             "sheet_name": self.sheet_name,
             "header_row": self.header_row,
             "field_to_header": dict(self.field_to_header),
+            "constant_values": dict(self.constant_values),
         }
 
     @classmethod
@@ -93,6 +112,7 @@ class ColumnMappingProfile:
                 sheet_name=str(document["sheet_name"]),
                 header_row=int(document.get("header_row", 1)),
                 field_to_header=dict(document.get("field_to_header") or {}),
+                constant_values=dict(document.get("constant_values") or {}),
             )
         except (KeyError, ValueError) as error:
             raise MappingError("Mapping profile document is malformed.") from error
@@ -152,6 +172,7 @@ def build_profile(
     header_row: int = 1,
     overrides: Mapping[str, str] | None = None,
     extra_aliases: Mapping[str, str] | None = None,
+    constants: Mapping[str, str] | None = None,
 ) -> ColumnMappingProfile:
     """Suggest a mapping, apply user overrides, and validate the result."""
 
@@ -165,12 +186,20 @@ def build_profile(
             proposed.pop(canonical_name, None)
         else:
             proposed[canonical_name] = str(header)
+    resolved_constants = {
+        name_: str(value)
+        for name_, value in (constants or {}).items()
+        if value is not None and str(value).strip()
+    }
+    for name_ in resolved_constants:
+        proposed.pop(name_, None)
     profile = ColumnMappingProfile(
         name=name,
         dataset_kind=DatasetKind(dataset_kind),
         sheet_name=sheet_name,
         header_row=header_row,
         field_to_header=proposed,
+        constant_values=resolved_constants,
     )
     profile.validate()
     return profile

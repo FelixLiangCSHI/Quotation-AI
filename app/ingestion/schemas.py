@@ -246,6 +246,56 @@ PRICING_SCHEMA = CanonicalSchema(
             aliases=("cogs", "cost of goods sold", "standard cost"),
         ),
         CanonicalField(
+            "installation_cogs",
+            FieldKind.DECIMAL,
+            aliases=("installation cogs", "install cogs"),
+        ),
+        CanonicalField(
+            "warranty_cogs",
+            FieldKind.DECIMAL,
+            aliases=("warranty cogs",),
+        ),
+        CanonicalField(
+            "cogs_installation_warranty",
+            FieldKind.DECIMAL,
+            aliases=("cogs i w", "cogs i&w", "cogs incl installation warranty"),
+        ),
+        CanonicalField(
+            "cogs_moving_average",
+            FieldKind.DECIMAL,
+            aliases=("cogs mov avg", "cogs moving average"),
+        ),
+        CanonicalField(
+            "freight",
+            FieldKind.DECIMAL,
+            aliases=("freight",),
+        ),
+        CanonicalField(
+            "duty",
+            FieldKind.DECIMAL,
+            aliases=("duty",),
+        ),
+        CanonicalField(
+            "tariff",
+            FieldKind.DECIMAL,
+            aliases=("tariff",),
+        ),
+        CanonicalField(
+            "service_net_price",
+            FieldKind.DECIMAL,
+            aliases=("service net price",),
+        ),
+        CanonicalField(
+            "service_cogs",
+            FieldKind.DECIMAL,
+            aliases=("service cogs",),
+        ),
+        CanonicalField(
+            "app_cogs",
+            FieldKind.DECIMAL,
+            aliases=("app cogs", "application cogs"),
+        ),
+        CanonicalField(
             "currency",
             FieldKind.CURRENCY,
             required=True,

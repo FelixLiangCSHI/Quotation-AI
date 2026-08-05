@@ -4,12 +4,18 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from app.data_loader import QuotationSnapshot, load_snapshot
 from app.models import Product, StepOption, ValidationResult
 from app.natural_language import QuoteRequest, parse_quote_request
+from app.requirement_fields import CONFIDENCE_CONFIRMATION_THRESHOLD
 from app.rule_engine import QuotationRuleEngine
+
+
+#: A selection at or above this confidence is applied without asking the user
+#: to confirm it. Anything below is proposed and must be confirmed explicitly.
+SELECTION_CONFIRMATION_THRESHOLD = CONFIDENCE_CONFIRMATION_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -21,6 +27,11 @@ class RecommendationItem:
     option_group: str | None
     reason: str
     source: dict[str, object]
+    #: How certain the deterministic selection is, in ``[0, 1]``.
+    confidence: float = 1.0
+    #: The decision-tree facts the选型 is based on, in the tree's own
+    #: vocabulary (product line, step, option group, constraint text).
+    evidence: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -31,6 +42,27 @@ class QuoteRecommendation:
     alternatives: tuple[RecommendationItem, ...]
     validation: ValidationResult
     notices: tuple[str, ...]
+
+    @property
+    def selection_confidence(self) -> float:
+        """Confidence of the proposed main model. Zero when there is none."""
+
+        return self.main_model.confidence if self.main_model else 0.0
+
+    @property
+    def requires_confirmation(self) -> bool:
+        """True when the user must confirm the选型 before it is applied.
+
+        A confident, rule-clean proposal is applied directly; anything less —
+        low confidence, no proposal, or a blocking rule issue — is only ever a
+        suggestion.
+        """
+
+        if self.main_model is None:
+            return True
+        if self.validation.status == "invalid":
+            return True
+        return self.main_model.confidence < SELECTION_CONFIRMATION_THRESHOLD
 
 
 DEFAULT_STEP_ORDER = (
@@ -123,7 +155,11 @@ class QuoteRecommender:
     def _select_main_model(self, request: QuoteRequest) -> RecommendationItem | None:
         if request.product_ids:
             for product_id in request.product_ids:
-                item = self._item_for_product_id(product_id, "You mentioned this product ID directly.")
+                item = self._item_for_product_id(
+                    product_id,
+                    "You mentioned this product ID directly.",
+                    confidence=1.0,
+                )
                 if item:
                     return item
 
@@ -139,6 +175,7 @@ class QuoteRecommender:
                 return _option_to_item(
                     fallback,
                     "Started from the base system because the request asks for a complete X-ray system.",
+                    confidence=0.6,
                 )
 
         scored_options = sorted(
@@ -152,15 +189,38 @@ class QuoteRecommender:
         )
         if scored_options and scored_options[0][0] > 0:
             score, option = scored_options[0]
-            return _option_to_item(option, self._reason_for_score(option, request, score))
+            return _option_to_item(
+                option,
+                self._reason_for_score(option, request, score),
+                confidence=self._match_confidence(scored_options),
+            )
 
         fallback = self._fallback_base_system(request)
         if fallback:
             return _option_to_item(
                 fallback,
                 "I could not find a strong keyword match, so I started from the closest base system.",
+                confidence=0.3,
             )
         return None
+
+    @staticmethod
+    def _match_confidence(
+        scored_options: Sequence[tuple[int, StepOption]],
+    ) -> float:
+        """Confidence of the best match, reduced when a rival scores as well.
+
+        An ambiguous request — two options with almost the same score — is a
+        genuine choice for the user, so it is deliberately held below the
+        confirmation threshold.
+        """
+
+        best_score = scored_options[0][0]
+        confidence = _score_confidence(best_score)
+        runner_up = scored_options[1][0] if len(scored_options) > 1 else 0
+        if best_score < 1_000 and runner_up >= best_score:
+            confidence = min(confidence, 0.5)
+        return confidence
 
     def _select_accessories(
         self,
@@ -204,6 +264,9 @@ class QuoteRecommender:
                 _option_to_item(
                     option,
                     f"Recommended as the {STEP_LABELS.get(step_suffix, step_suffix)} option for the same system family.",
+                    confidence=_score_confidence(
+                        self._score_option(option, request)
+                    ),
                 )
             )
         return tuple(accessories)
@@ -260,7 +323,13 @@ class QuoteRecommender:
             accessories.append(
                 _profile_product_to_item(
                     product,
-                    f"Recommended from the default {profile_line} quote profile.",
+                    f"Recommended from the default {profile_line} quote profile "
+                    f"at {step_id}.",
+                    confidence=_score_confidence(
+                        self._score_profile_product(product, request)
+                    )
+                    if len(candidates) > 1
+                    else 0.9,
                 )
             )
 
@@ -292,6 +361,15 @@ class QuoteRecommender:
         return _profile_product_to_item(
             product,
             f"Started from the default {profile_line} quote profile.",
+            confidence=(
+                1.0
+                if str(product.get("product_id") or "") in request.product_ids
+                else 0.85
+                if len(candidates) == 1
+                else _score_confidence(
+                    self._score_profile_product(product, request)
+                )
+            ),
         )
 
     def _score_profile_product(self, product: dict[str, Any], request: QuoteRequest) -> int:
@@ -382,7 +460,13 @@ class QuoteRecommender:
         for score, option in scored_options:
             if score <= 0 or len(alternatives) >= limit:
                 break
-            alternatives.append(_option_to_item(option, "Alternative match from the same request."))
+            alternatives.append(
+                _option_to_item(
+                    option,
+                    "Alternative match from the same request.",
+                    confidence=_score_confidence(score),
+                )
+            )
         return tuple(alternatives)
 
     def _best_option_for_step(
@@ -490,16 +574,24 @@ class QuoteRecommender:
         keywords = set(request.keywords)
         return bool(request.system_family or keywords.intersection({"system", "x-ray"}))
 
-    def _item_for_product_id(self, product_id: str, reason: str) -> RecommendationItem | None:
+    def _item_for_product_id(
+        self,
+        product_id: str,
+        reason: str,
+        *,
+        confidence: float = 1.0,
+    ) -> RecommendationItem | None:
         for option in self.snapshot.step_options:
             if option.product_id == product_id:
-                return _option_to_item(option, reason)
+                return _option_to_item(option, reason, confidence=confidence)
         product = self.snapshot.products_by_id.get(product_id)
         if product:
-            return _product_to_item(product, reason)
+            return _product_to_item(product, reason, confidence=confidence)
         profile_products = self.profile_products_by_id.get(product_id, ())
         if profile_products:
-            return _profile_product_to_item(profile_products[0], reason)
+            return _profile_product_to_item(
+                profile_products[0], reason, confidence=confidence
+            )
         return None
 
     def _build_notices(
@@ -513,6 +605,13 @@ class QuoteRecommender:
             notices.append("Please confirm the sales region so region-only rules can be checked.")
         if main_model is None:
             notices.append("I could not map the request to a catalog product yet.")
+        elif main_model.confidence < SELECTION_CONFIRMATION_THRESHOLD:
+            notices.append(
+                "The product选型 confidence is "
+                f"{main_model.confidence:.0%}, which is below the "
+                f"{SELECTION_CONFIRMATION_THRESHOLD:.0%} threshold, so please "
+                "confirm the product before pricing."
+            )
         if validation.status == "invalid":
             notices.append("The suggested set has blocking rule issues and should be adjusted before quotation.")
         return tuple(notices)
@@ -526,7 +625,16 @@ def render_recommendation_text(recommendation: QuoteRecommendation) -> str:
     lines = [
         f"I recommend {main.short_description} (product ID {main.product_id}) as the main model.",
         f"Reason: {main.reason}",
+        f"Selection confidence: {main.confidence:.0%}"
+        + (
+            " (confirmation required)."
+            if recommendation.requires_confirmation
+            else " (applied automatically)."
+        ),
     ]
+    if main.evidence:
+        lines.append("Decision tree basis:")
+        lines.extend(f"- {line}" for line in main.evidence)
 
     if recommendation.accessories:
         lines.append("Recommended accessories/options:")
@@ -553,7 +661,13 @@ def render_recommendation_text(recommendation: QuoteRecommendation) -> str:
     return "\n".join(lines)
 
 
-def _option_to_item(option: StepOption, reason: str) -> RecommendationItem:
+def _option_to_item(
+    option: StepOption,
+    reason: str,
+    *,
+    confidence: float = 1.0,
+    evidence: tuple[str, ...] = (),
+) -> RecommendationItem:
     return RecommendationItem(
         product_id=option.product_id,
         short_description=option.short_description,
@@ -562,10 +676,18 @@ def _option_to_item(option: StepOption, reason: str) -> RecommendationItem:
         option_group=option.option_group,
         reason=reason,
         source=option.source,
+        confidence=_clamp_confidence(confidence),
+        evidence=evidence or _option_evidence(option),
     )
 
 
-def _product_to_item(product: Product, reason: str) -> RecommendationItem:
+def _product_to_item(
+    product: Product,
+    reason: str,
+    *,
+    confidence: float = 1.0,
+    evidence: tuple[str, ...] = (),
+) -> RecommendationItem:
     return RecommendationItem(
         product_id=product.product_id,
         short_description=product.short_description,
@@ -574,10 +696,18 @@ def _product_to_item(product: Product, reason: str) -> RecommendationItem:
         option_group=None,
         reason=reason,
         source=product.source,
+        confidence=_clamp_confidence(confidence),
+        evidence=evidence,
     )
 
 
-def _profile_product_to_item(product: dict[str, Any], reason: str) -> RecommendationItem:
+def _profile_product_to_item(
+    product: dict[str, Any],
+    reason: str,
+    *,
+    confidence: float = 1.0,
+    evidence: tuple[str, ...] = (),
+) -> RecommendationItem:
     product_id = str(product.get("product_id") or "").strip()
     description = str(product.get("short_description") or "").strip()
     return RecommendationItem(
@@ -588,7 +718,67 @@ def _profile_product_to_item(product: dict[str, Any], reason: str) -> Recommenda
         option_group=str(product.get("option_group") or "").strip() or None,
         reason=reason,
         source=dict(product.get("source") or {}),
+        confidence=_clamp_confidence(confidence),
+        evidence=evidence or _profile_evidence(product),
     )
+
+
+def _clamp_confidence(value: float) -> float:
+    return round(min(1.0, max(0.0, float(value))), 2)
+
+
+def _option_evidence(option: StepOption) -> tuple[str, ...]:
+    """Decision-tree facts behind a catalog step option."""
+
+    lines: list[str] = []
+    if option.step_id:
+        lines.append(f"Decision tree step: {option.step_id}")
+    if option.option_group:
+        lines.append(f"Option group: {option.option_group}")
+    if option.raw_constraint_text:
+        lines.append(f"Rule text: {option.raw_constraint_text}")
+    return tuple(lines)
+
+
+def _profile_evidence(product: dict[str, Any]) -> tuple[str, ...]:
+    """Decision-tree facts behind a quote-profile product."""
+
+    lines: list[str] = []
+    product_line = str(product.get("product_line") or "").strip()
+    step_id = str(product.get("step_id") or "").strip()
+    option_group = str(product.get("option_group") or "").strip()
+    comment = str(product.get("comment") or "").strip()
+    if product_line:
+        lines.append(f"Decision tree product line: {product_line}")
+    if step_id:
+        lines.append(f"Decision tree step: {step_id}")
+    if option_group:
+        lines.append(f"Option group: {option_group}")
+    if comment:
+        lines.append(f"Rule text: {comment}")
+    return tuple(lines)
+
+
+def _score_confidence(score: int, *, exact_product_id: bool = False) -> float:
+    """Map a deterministic match score onto a calibrated confidence.
+
+    An explicit product ID is certain. Otherwise the confidence rises with the
+    strength of the keyword, family and step evidence, and only a strong match
+    reaches :data:`SELECTION_CONFIRMATION_THRESHOLD`, so a weak match is always
+    proposed for confirmation rather than applied silently.
+    """
+
+    if exact_product_id or score >= 1_000:
+        return 1.0
+    if score >= 40:
+        return 0.9
+    if score >= 24:
+        return 0.75
+    if score >= 12:
+        return 0.6
+    if score > 0:
+        return 0.45
+    return 0.25
 
 
 def _option_text(option: StepOption) -> str:

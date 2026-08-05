@@ -14,6 +14,7 @@ from typing import Any
 
 import streamlit as st
 
+from app.config import SAP_BASE_CURRENCY
 from app.ingestion.config import SUPPORTED_EXTENSIONS, load_ingestion_config
 from app.ingestion.mapping import (
     ColumnMappingProfile,
@@ -37,6 +38,7 @@ from app.ingestion.repository import (
     PricingDataRepository,
     PricingDataRepositoryError,
 )
+from app.ingestion.sap_archived import archived_plans
 from app.ingestion.schemas import DatasetKind, get_schema
 from app.auth.provider import PermissionDeniedError
 from app.auth.roles import Permission
@@ -76,11 +78,18 @@ def render(user) -> None:
         )
         return
 
-    upload_tab, review_tab, versions_tab = st.tabs(
-        ["1. Upload and map", "2. Review and publish", "3. Versions"]
+    upload_tab, archived_tab, review_tab, versions_tab = st.tabs(
+        [
+            "1. Upload and map",
+            "1b. Upload SAP archived export",
+            "2. Review and publish",
+            "3. Versions",
+        ]
     )
     with upload_tab:
         _render_upload()
+    with archived_tab:
+        _render_archived_upload()
     with review_tab:
         _render_review(user)
     with versions_tab:
@@ -137,6 +146,115 @@ def _render_upload() -> None:
         )
 
     _render_sheet_mapping(session)
+
+
+def _render_archived_upload() -> None:
+    """One-click import for the desensitised archived SAP price-list layout.
+
+    The archived export is a wide price list with no currency column, so the
+    canonical column mapping cannot be inferred from headers alone. The layout
+    is recorded once in :mod:`app.ingestion.sap_archived`; everything after
+    the mapping is the ordinary pipeline, including quarantine, explicit
+    confirmation, publication and activation.
+    """
+
+    config = load_ingestion_config()
+    st.info(
+        "Use this for a desensitised `SAP_archived` price-list export: one row "
+        "per catalogue number with the cost breakdown in columns and no "
+        "currency column. Every sheet is mapped to the pricing dataset "
+        f"and priced in {SAP_BASE_CURRENCY}.",
+        icon=":material/inventory:",
+    )
+
+    uploaded = st.file_uploader(
+        "SAP archived Excel export (desensitised)",
+        type=[extension.lstrip(".") for extension in SUPPORTED_EXTENSIONS],
+        accept_multiple_files=False,
+        key="archived_uploader",
+    )
+    if uploaded is None:
+        return
+
+    try:
+        session = start_import(
+            uploaded.name,
+            uploaded.getvalue(),
+            config=config,
+            storage=LocalWorkbookStorage(config=config),
+        )
+    except WorkbookValidationError as error:
+        st.error(str(error), icon=":material/block:")
+        return
+
+    st.session_state[SESSION_KEY] = session
+    st.success(
+        f"{session.workbook.filename} accepted "
+        f"({session.workbook.size_bytes:,} bytes).",
+        icon=":material/check_circle:",
+    )
+    st.caption(f"File hash (SHA-256): `{session.workbook.content_hash}`")
+
+    duplicate = _repository().find_version_by_checksum(
+        session.workbook.content_hash
+    )
+    if duplicate is not None:
+        st.warning(
+            f"This exact workbook was already imported as {duplicate.label!r}.",
+            icon=":material/content_copy:",
+        )
+
+    header_row_input = int(
+        st.number_input(
+            "Header row (leave at 0 to detect automatically)",
+            min_value=0,
+            value=0,
+            step=1,
+            key="archived_header_row",
+        )
+    )
+    header_row = header_row_input or None
+
+    try:
+        plans, skipped = archived_plans(session, header_row=header_row)
+    except (IngestionError, WorkbookValidationError) as error:
+        st.error(str(error), icon=":material/error:")
+        return
+
+    for note in skipped:
+        st.warning(f"Sheet skipped: {note}", icon=":material/warning:")
+    if not plans:
+        st.error(
+            "No sheet of this workbook matches the archived price-list layout. "
+            "Use the standard upload tab and map the columns manually.",
+            icon=":material/block:",
+        )
+        return
+
+    st.caption(
+        "Sheets recognised: " + ", ".join(plan.profile.sheet_name for plan in plans)
+    )
+    st.dataframe(
+        _preview_records(session, plans[0].profile),
+        use_container_width=True,
+    )
+
+    if st.button(
+        "Validate archived workbook",
+        type="primary",
+        icon=":material/rule:",
+        key="archived_validate",
+    ):
+        try:
+            import_preview = run_import(session, plans)
+        except (IngestionError, MappingError) as error:
+            st.error(str(error), icon=":material/error:")
+            return
+        st.session_state[PREVIEW_KEY] = import_preview
+        st.success(
+            "Validation complete. Open the review tab before publishing.",
+            icon=":material/check_circle:",
+        )
 
 
 def _render_sheet_mapping(session: ImportSession) -> None:

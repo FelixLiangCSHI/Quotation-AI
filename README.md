@@ -52,7 +52,13 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   `docs/phase7_email_delivery_and_reminders.md`.
 - Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
-- Main-product recommendation and explicit product selection before analysis.
+- Main-product recommendation with a deterministic selection confidence: a
+  confident, rule-clean proposal is applied automatically and only a
+  low-confidence, ambiguous or rule-blocked proposal has to be confirmed.
+  Every proposal states its decision-tree basis (product line, step, option
+  group and rule text).
+- Offline `SAP_archived` price-list upload with the wide cost breakdown mapped
+  to the canonical pricing dataset.
 - Deterministic rule checks for:
   - product region limits,
   - system combination compatibility,
@@ -256,9 +262,18 @@ fields are configured centrally in `app/config.py` and collected in this order:
 
 The agent merges confidently extracted values across turns and preserves prior
 answers unless correction language such as `change`, `should be`, or `actually`
-targets that field. A quote becomes ready for pricing only
-after every required field is confirmed and a recommended product is explicitly
-selected.
+targets that field. A quote becomes ready for pricing only after every required
+field is confirmed and a product is selected.
+
+Product selection is confidence gated. The recommender scores every candidate
+deterministically and converts that score into a confidence. At or above
+`SELECTION_CONFIRMATION_THRESHOLD` — with no blocking rule issue and no
+existing selection — the product is applied automatically and the automatic
+step is written to the audit trail; the user can still change it at any time.
+Below the threshold, when two candidates score equally, when the rule check is
+blocking, or when no candidate exists, the product is only proposed and must be
+confirmed explicitly. The stated reason is accompanied by the decision-tree
+evidence the选型 came from, so the conversation matches the decision tree.
 
 The Streamlit interface shows the draft summary, missing fields, current stage,
 and safe recommendation choices. It does not render catalog source dictionaries

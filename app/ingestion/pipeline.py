@@ -133,6 +133,7 @@ class ImportSession:
         header_row: int | None = None,
         overrides: Mapping[str, str] | None = None,
         extra_aliases: Mapping[str, str] | None = None,
+        constants: Mapping[str, str] | None = None,
         name: str = "",
     ) -> ColumnMappingProfile:
         preview = self.preview_sheet(sheet_name, header_row=header_row, max_rows=1)
@@ -145,6 +146,7 @@ class ImportSession:
             header_row=preview.header_row,
             overrides=overrides,
             extra_aliases=extra_aliases,
+            constants=constants,
         )
 
 
@@ -270,10 +272,14 @@ def extract_mapped_rows(
             )
         column_for_field[canonical_name] = index
 
+    constants = dict(profile.constant_values)
     rows = [
         {
-            name: raw_row[index] if index < len(raw_row) else None
-            for name, index in column_for_field.items()
+            **constants,
+            **{
+                name: raw_row[index] if index < len(raw_row) else None
+                for name, index in column_for_field.items()
+            },
         }
         for raw_row in preview.rows
     ]
