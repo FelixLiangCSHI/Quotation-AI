@@ -619,10 +619,9 @@ class EmailService:
     ) -> tuple[EmailAttachment, ...]:
         """Return the approved PDF for the current quotation version."""
 
-        from app.document_generator import (
-            generate_quotation_pdf,
-            safe_quotation_filename,
-        )
+        from app.documents.context import build_customer_document_context
+        from app.documents.plan import deterministic_document_plan
+        from app.documents.renderer import render_quotation_pdf
 
         document = uow.documents.latest_for_version(
             quotation_id=quotation_id,
@@ -630,18 +629,25 @@ class EmailService:
             kind="customer_pdf",
         )
         if document is None:
-            generated = generate_quotation_pdf(state)
+            context = build_customer_document_context(
+                state, quotation_version=quotation_version
+            )
+            rendered = render_quotation_pdf(
+                context, deterministic_document_plan()
+            )
             document_id = uow.documents.add(
                 quotation_id=quotation_id,
                 kind="customer_pdf",
                 audience="customer",
-                filename=generated.filename or safe_quotation_filename(
-                    quotation_id
-                ),
-                mime_type=generated.mime_type,
-                content=generated.bytes_data,
+                filename=rendered.filename,
+                mime_type=rendered.mime_type,
+                content=rendered.content,
                 quotation_version=quotation_version,
                 generated_by_user_id=user.user_id,
+                template_version=rendered.template_version,
+                document_plan_version=rendered.plan_version,
+                agent_provider="deterministic",
+                render_engine=rendered.engine,
             )
             document = uow.documents.get(document_id)
         assert document is not None

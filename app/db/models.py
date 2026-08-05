@@ -742,27 +742,68 @@ class AuditEventRecord(Base):
 
 
 class GeneratedDocument(Base, TimestampMixin):
-    """A generated, downloadable and auditable artefact."""
+    """A generated, downloadable and auditable artefact.
+
+    The Phase 8 metadata columns make every customer document traceable to the
+    exact quotation version, approval action, template, document plan and
+    agent provider that produced it. Historical documents are retained and
+    stay associated with their original quotation version; a material edit
+    marks them superseded rather than deleting them.
+    """
 
     __tablename__ = "generated_documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True
+    )
     quotation_id: Mapped[int] = mapped_column(
         ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    quotation_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
     quotation_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1
+    )
+    approval_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_actions.id", ondelete="SET NULL"), nullable=True
     )
     # customer_pdf | internal_audit_export | customer_export
     kind: Mapped[str] = mapped_column(String(50), nullable=False)
     audience: Mapped[str] = mapped_column(
         String(20), nullable=False, default="internal"
     )
+    template_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    document_plan_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    agent_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    render_engine: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime(), nullable=True
+    )
     filename: Mapped[str] = mapped_column(String(300), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    storage_reference: Mapped[str] = mapped_column(
+        String(300), nullable=False, default=""
+    )
     checksum: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: generated | superseded | failed
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="generated", index=True
+    )
+    error_category: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="none"
+    )
     generated_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

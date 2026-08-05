@@ -733,12 +733,22 @@ class SqlAlchemyApprovalRepository:
         self._session.flush()
         return record.id
 
+    def list_actions(self, *, task_id: int) -> list[models.ApprovalAction]:
+        """Approval actions recorded against ``task_id``, oldest first."""
+
+        return list(
+            self._session.scalars(
+                select(models.ApprovalAction)
+                .where(models.ApprovalAction.approval_task_id == task_id)
+                .order_by(models.ApprovalAction.id)
+            )
+        )
+
     def record_override(
         self,
         *,
         task_id: int,
-        approval_action_id: int | None,
-        original_decision: str,
+        approval_action_id: int | None,        original_decision: str,
         evaluated_margin_percent: str,
         policy_threshold_percent: str,
         policy_version_id: str,
@@ -935,6 +945,16 @@ class SqlAlchemyDocumentRepository:
         content: bytes,
         quotation_version: int = 0,
         generated_by_user_id: int | None = None,
+        document_id: str = "",
+        approval_action_id: int | None = None,
+        template_version: str = "",
+        document_plan_version: str = "",
+        agent_provider: str = "",
+        render_engine: str = "",
+        storage_reference: str = "",
+        status: str = "generated",
+        error_category: str = "none",
+        generated_at=None,
     ) -> int:
         parent = self._session.scalars(
             select(models.Quotation).where(
@@ -943,16 +963,28 @@ class SqlAlchemyDocumentRepository:
         ).one_or_none()
         if parent is None:
             raise QuotationNotFoundError(f"Unknown quotation: {quotation_id}")
+        version = quotation_version or parent.version
         record = models.GeneratedDocument(
+            document_id=document_id or f"DOC-{uuid4().hex[:12].upper()}",
             quotation_id=parent.id,
-            quotation_version=quotation_version or parent.version,
+            quotation_reference=parent.quotation_id,
+            quotation_version=version,
+            approval_action_id=approval_action_id,
             kind=kind,
             audience=audience,
+            template_version=template_version,
+            document_plan_version=document_plan_version,
+            agent_provider=agent_provider,
+            render_engine=render_engine,
+            generated_at=generated_at or utc_now(),
             filename=filename,
             mime_type=mime_type,
             content=content,
+            storage_reference=storage_reference or f"db://generated_documents/{kind}",
             byte_size=len(content),
             checksum=sha256(content).hexdigest(),
+            status=status,
+            error_category=error_category,
             generated_by_user_id=generated_by_user_id,
         )
         self._session.add(record)
@@ -969,12 +1001,70 @@ class SqlAlchemyDocumentRepository:
                 models.Quotation.quotation_id == quotation_id,
                 models.GeneratedDocument.quotation_version == quotation_version,
                 models.GeneratedDocument.kind == kind,
+                models.GeneratedDocument.status == "generated",
             )
             .order_by(models.GeneratedDocument.id.desc())
         ).first()
 
+    def list_for_quotation(
+        self, *, quotation_id: str, kind: str | None = None
+    ) -> list[models.GeneratedDocument]:
+        statement = (
+            select(models.GeneratedDocument)
+            .join(models.Quotation)
+            .where(models.Quotation.quotation_id == quotation_id)
+            .order_by(models.GeneratedDocument.id.desc())
+        )
+        if kind is not None:
+            statement = statement.where(models.GeneratedDocument.kind == kind)
+        return list(self._session.scalars(statement))
+
+    def supersede_for_quotation(
+        self,
+        *,
+        quotation_id: str,
+        before_version: int | None = None,
+        kind: str | None = None,
+    ) -> tuple[int, ...]:
+        """Mark previously generated documents as superseded.
+
+        Content is retained: a historical approved document stays available
+        for audit, associated with its original quotation version, but it can
+        no longer be presented as the current customer document.
+        """
+
+        statement = (
+            select(models.GeneratedDocument)
+            .join(models.Quotation)
+            .where(
+                models.Quotation.quotation_id == quotation_id,
+                models.GeneratedDocument.status == "generated",
+            )
+        )
+        if kind is not None:
+            statement = statement.where(models.GeneratedDocument.kind == kind)
+        if before_version is not None:
+            statement = statement.where(
+                models.GeneratedDocument.quotation_version < before_version
+            )
+        superseded: list[int] = []
+        for record in self._session.scalars(statement):
+            record.status = "superseded"
+            superseded.append(record.id)
+        self._session.flush()
+        return tuple(superseded)
+
     def get(self, document_id: int) -> models.GeneratedDocument | None:
         return self._session.get(models.GeneratedDocument, document_id)
+
+    def get_by_document_id(
+        self, document_id: str
+    ) -> models.GeneratedDocument | None:
+        return self._session.scalars(
+            select(models.GeneratedDocument).where(
+                models.GeneratedDocument.document_id == document_id
+            )
+        ).one_or_none()
 
 
 # -- ORM to DTO mapping ------------------------------------------------

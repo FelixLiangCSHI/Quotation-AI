@@ -810,4 +810,31 @@ def apply_material_edit(
         reason="Material quotation edit after submission.",
         quotation_version=saved.version,
     )
+    _invalidate_customer_documents(
+        quotation_id,
+        user=user,
+        new_version=saved.version,
+        session_factory=approval_service._session_factory,
+    )
     return service.load_quotation(quotation_id)
+
+
+def _invalidate_customer_documents(
+    quotation_id: str,
+    *,
+    user: AuthenticatedUser,
+    new_version: int,
+    session_factory=None,
+) -> None:
+    """Supersede customer documents produced before a material edit.
+
+    Documents are retained for audit and stay associated with their original
+    quotation version; they simply stop being usable as the current customer
+    document.
+    """
+
+    from app.services.document_service import DocumentService
+
+    DocumentService(session_factory).invalidate_for_material_edit(
+        quotation_id, user=user, new_version=new_version
+    )
