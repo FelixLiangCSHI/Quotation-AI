@@ -26,7 +26,17 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   deterministic compatibility check before it can be added, and recommendations
   are labelled required, recommended, optional, incompatible or not evaluated.
 - Material edits (adding, editing or removing a line item) clear the pricing
-  run, validation run, approval and generated customer documents.
+  run, quotation pricing analysis, logical judgement, AI explanation,
+  validation run, approval and generated customer documents.
+- Multi-line pricing analysis at line, bundle/category and quotation level
+  (`app/quotation_pricing.py`), with a deterministic commercial margin gate
+  (`app/margin_gate.py`) driven by a versioned commercial policy
+  (`app/commercial_policy.py`). Quotation gross margin above the active
+  threshold passes the gate; a margin equal to or below it requires human
+  approval; missing trusted cost data, invalid monetary values, mixed
+  currencies or a technical incompatibility block the quotation. Agent 2 may
+  explain the result but can never change it. See
+  `docs/phase5_margin_gate_and_multiline_pricing.md`.
 - Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
 - Main-product recommendation and explicit product selection before analysis.

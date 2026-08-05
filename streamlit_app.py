@@ -68,11 +68,14 @@ from app.requirement_fields import (
 from app.requirement_intake import pending_confirmations
 from app.recommender import QuoteRecommendation, RecommendationItem
 from app.recommender import QuoteRecommender
+from app.quotation_pricing import display_money, display_percent
 from app.workflow_orchestrator import (
     WorkflowOrchestrationError,
+    analyse_quotation_lines,
     analyse_workflow_pricing,
     apply_structured_requirements,
     confirm_requirement_candidate,
+    judge_quotation,
     process_requirement_message,
     select_recommended_product,
     validate_workflow,
@@ -1264,6 +1267,8 @@ def _render_pricing_analysis(
             state,
         )
 
+    _render_quotation_margin_gate(state)
+
 
 def _selectable_items(
     recommendation: QuoteRecommendation,
@@ -1632,6 +1637,203 @@ def _render_audit_exports(
             icon=":material/description:",
             use_container_width=True,
         )
+
+
+def _render_quotation_margin_gate(state: QuotationWorkflowState) -> None:
+    """Multi-line pricing analysis and the deterministic margin gate."""
+
+    st.divider()
+    st.subheader("E2. Quotation-level margin gate")
+    st.caption(
+        "Trusted calculation. Every value below is produced deterministically "
+        "from the quotation line items; no AI output can change a cost, price, "
+        "margin, threshold or decision."
+    )
+    if st.button(
+        "Run multi-line pricing and logical judgement",
+        icon=":material/balance:",
+        disabled=not state.draft.line_items,
+    ):
+        analyse_quotation_lines(state, get_pricing_engine())
+        judge_quotation(state)
+        _persist_and_rerun(
+            state,
+            event_type="commercial_decision_completed",
+            changed_fields=("combined_decision",),
+        )
+
+    pricing = state.quotation_pricing
+    decision = state.combined_decision
+    if pricing is None or decision is None or not decision.policy_version_id:
+        st.info(
+            "Run the multi-line pricing analysis to evaluate the quotation "
+            "against the active commercial policy.",
+            icon=":material/hourglass_top:",
+        )
+        return
+
+    currency = pricing.currency
+    totals = st.columns(4, gap="medium", border=True)
+    totals[0].metric(
+        "Quotation revenue",
+        _format_decimal_money(pricing.total_revenue, currency),
+    )
+    totals[1].metric(
+        "Quotation estimated cost",
+        _format_decimal_money(pricing.total_cost, currency),
+    )
+    totals[2].metric(
+        "Gross margin amount",
+        _format_decimal_money(pricing.gross_margin_amount, currency),
+    )
+    totals[3].metric(
+        "Gross margin percentage",
+        _format_decimal_percent(pricing.gross_margin_percent),
+    )
+
+    gate = st.columns(3, gap="medium", border=True)
+    gate[0].metric(
+        "Active threshold",
+        _format_decimal_percent(decision.threshold_percent),
+    )
+    gate[1].metric(
+        "Result",
+        decision.status.replace("_", " ").upper(),
+    )
+    gate[2].metric("Policy version", decision.policy_version_id)
+
+    st.caption(
+        f"Policy: {decision.policy_name}. Displayed values are rounded for "
+        "reading only; the decision was evaluated on the full internal decimal "
+        "value."
+    )
+    st.markdown(
+        f"**Rule in plain language** — Gross margin greater than "
+        f"{_format_decimal_percent(decision.threshold_percent)}: passes the "
+        "provisional margin gate. Gross margin equal to or below "
+        f"{_format_decimal_percent(decision.threshold_percent)}: requires "
+        "human approval."
+    )
+
+    with st.container(border=True):
+        st.markdown(
+            f"#### {_status_icon(decision.status)} Rule outcome — "
+            f"{decision.status.replace('_', ' ').upper()}"
+        )
+        st.write(decision.summary)
+        if decision.triggered_rule_ids:
+            st.caption(
+                "Triggered rule IDs: " + ", ".join(decision.triggered_rule_ids)
+            )
+        if decision.blocking_reasons:
+            st.error(
+                "Blocking reasons: "
+                + ", ".join(
+                    reason.replace("_", " ")
+                    for reason in decision.blocking_reasons
+                ),
+                icon=":material/block:",
+            )
+        for reason in decision.review_reasons:
+            st.warning(reason, icon=":material/gavel:")
+        st.info(
+            f"Next action: {decision.recommended_next_action}",
+            icon=":material/arrow_forward:",
+        )
+
+    st.markdown("#### Line-level pricing analysis")
+    st.dataframe(
+        [
+            {
+                "Line": line.line_id,
+                "Product": line.product_id,
+                "Type": line.line_item_type.replace("_", " "),
+                "Qty": line.quantity,
+                "Unit price": _format_decimal_money(
+                    line.proposed_unit_price, currency
+                ),
+                "Line revenue": _format_decimal_money(
+                    line.line_revenue, currency
+                ),
+                "Gross margin %": _format_decimal_percent(
+                    line.gross_margin_percent
+                ),
+                "Missing data": ", ".join(line.missing_data_flags) or "-",
+            }
+            for line in pricing.line_analyses
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    if pricing.bundle_analyses:
+        st.markdown("#### Bundle / category pricing analysis")
+        st.dataframe(
+            [
+                {
+                    "Category": bundle.bundle_key.replace("_", " "),
+                    "Lines": bundle.line_count,
+                    "Revenue": _format_decimal_money(
+                        bundle.total_revenue, currency
+                    ),
+                    "Cost": _format_decimal_money(bundle.total_cost, currency),
+                    "Gross margin %": _format_decimal_percent(
+                        bundle.gross_margin_percent
+                    ),
+                }
+                for bundle in pricing.bundle_analyses
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.expander("Rule trace — trusted evaluation", icon=":material/rule:"):
+        st.dataframe(
+            [
+                {
+                    "Step": entry.step,
+                    "Rule": entry.rule_id,
+                    "Check": entry.name,
+                    "Outcome": entry.outcome.replace("_", " ").upper(),
+                    "Explanation": entry.message,
+                }
+                for entry in decision.rule_trace
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    missing = list(pricing.missing_data_flags)
+    if missing:
+        st.warning(
+            "Missing or not-evaluated information: "
+            + ", ".join(flag.replace("_", " ") for flag in missing),
+            icon=":material/help:",
+        )
+
+    explanation = state.pricing_explanation
+    if explanation is not None:
+        with st.container(border=True):
+            st.markdown(f"#### :material/smart_toy: {explanation.label}")
+            if explanation.fallback_used:
+                st.caption(
+                    "Deterministic explanation was used "
+                    f"({explanation.fallback_reason or 'no provider configured'})."
+                )
+            st.write(explanation.summary)
+            st.write(explanation.explanation)
+            for risk in explanation.risks:
+                st.caption(f"- {risk}")
+
+
+def _format_decimal_money(value: str | None, currency: str) -> str:
+    rounded = display_money(value)
+    return "Unavailable" if rounded is None else f"{currency} {rounded}"
+
+
+def _format_decimal_percent(value: str | None) -> str:
+    rounded = display_percent(value)
+    return "Unavailable" if rounded is None else f"{rounded}%"
 
 
 def _internal_data_visible() -> bool:
