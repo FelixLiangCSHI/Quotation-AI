@@ -61,7 +61,7 @@ def prepare_approval(state: QuotationWorkflowState) -> ApprovalRecord:
     if (
         state.validation_stale
         or state.combined_decision is None
-        or state.pricing_result is None
+        or (state.pricing_result is None and state.quotation_pricing is None)
     ):
         state.approval = ApprovalRecord(status=ApprovalStatus.NOT_READY)
         return state.approval

@@ -76,9 +76,11 @@ def invalidate_validation_outputs(
 ) -> None:
     if clear_pricing:
         state.pricing_result = None
+        state.quotation_pricing = None
     state.technical_validation = None
     state.commercial_validation = None
     state.combined_decision = None
+    state.pricing_explanation = None
     state.internal_email = None
     state.customer_email = None
     state.validation_stale = True
