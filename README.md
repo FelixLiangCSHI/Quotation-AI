@@ -44,6 +44,12 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   documented overrides, staleness and duplicate-action guards, and a
   role-restricted audit trail. See
   `docs/phase6_authenticated_approval_and_audit.md`.
+- Email composition, delivery and reminders (Phase 7): separated composition,
+  AI wording assistance, recipient resolution, delivery adapters (console,
+  SMTP, Microsoft Graph slot), persistent email records, an approval-gated and
+  human-reviewed customer email, and a database-backed two-day approval
+  reminder worker that survives a web-process restart. See
+  `docs/phase7_email_delivery_and_reminders.md`.
 - Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
 - Main-product recommendation and explicit product selection before analysis.
@@ -353,15 +359,20 @@ Both use explicit field whitelists and omit raw workbook rows, workbook paths,
 sheet/cell provenance, and secrets. Customer data additionally excludes
 internal cost, margin, commercial-rule, approver, reason, and override details.
 
-Pending reviews show a simulated reminder timestamp two days after quotation
-creation. No worker, scheduler, or email is created; reminder email generation
-is a preview only.
+Pending approval tasks persist a reminder due time two days after submission
+(`APPROVAL_REMINDER_DELAY_HOURS`). A separate worker process,
+`python -m worker.reminder_worker --run-once`, claims due tasks, rechecks their
+status, and sends at most one reminder per configured cycle. The scheduler is
+never inside Streamlit, so restarting the web process cannot lose a reminder.
 
 ## Deterministic Emails and Quotation PDF
 
-Phase 6 adds deterministic templates for internal approval requests, simulated
+Phase 6 added deterministic templates for internal approval requests,
 two-day reminders, customer quotation emails, and rejection/revision
-notifications. No email is sent. Customer email generation is allowed only for
+notifications. Phase 7 delivers them through a pluggable
+`EmailDeliveryProvider` (console by default, SMTP, and a configuration-gated
+Microsoft Graph adapter), persists an `EmailRecord` for every attempt, and
+requires an explicit human draft review before any customer email is sent. Customer email generation is allowed only for
 `approved` and `approved_with_override` quotations and excludes internal costs,
 margins, pricing policies, authority thresholds, rule IDs, provenance, and
 internal comments.

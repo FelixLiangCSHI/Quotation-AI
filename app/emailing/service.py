@@ -732,6 +732,52 @@ class EmailService:
 
     # -- operations ----------------------------------------------------
 
+    def retry_delivery(
+        self, email_record_id: int, *, user: AuthenticatedUser
+    ) -> EmailRecordDTO:
+        """Recompose and resend a failed email under its original key.
+
+        Retrying never reuses a stored body: the deterministic templates are
+        rendered again from the persisted domain state, so a retry can never
+        deliver stale or tampered content. Only failed internal emails may be
+        retried this way; a customer email must go through the human draft
+        review step again.
+        """
+
+        self._require(user, Permission.SUBMIT_QUOTATION)
+        with self._unit_of_work() as uow:
+            record = uow.emails.get(email_record_id)
+        if record is None:
+            raise EmailError(f"Unknown email record: {email_record_id}")
+        if record.status != EmailStatus.FAILED.value:
+            raise EmailNotAllowedError("Only a failed email can be retried.")
+        if record.last_error_category in {
+            category.value for category in PERMANENT_ERROR_CATEGORIES
+        }:
+            raise EmailNotAllowedError(
+                "This email failed permanently ("
+                f"{record.last_error_category}) and must be corrected in "
+                "configuration or in the user record before another attempt."
+            )
+        if record.email_type == EmailType.APPROVAL_REQUEST.value:
+            if record.approval_task_id is None:
+                raise EmailError("The approval task reference is missing.")
+            return self.send_approval_request(
+                record.approval_task_id, user=user
+            )
+        if record.email_type in {
+            EmailType.REVISION_REQUEST.value,
+            EmailType.REJECTION_NOTIFICATION.value,
+        }:
+            return self.send_owner_notification(
+                record.quotation_reference,
+                email_type=EmailType(record.email_type),
+                user=user,
+            )
+        raise EmailNotAllowedError(
+            f"{record.email_type} emails are not retried from the UI."
+        )
+
     def list_emails(
         self, quotation_id: str, *, user: AuthenticatedUser
     ) -> tuple[EmailRecordDTO, ...]:

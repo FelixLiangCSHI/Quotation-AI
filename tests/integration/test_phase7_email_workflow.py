@@ -379,3 +379,49 @@ def test_a_provider_failure_is_persisted_against_the_email_record(
     with UnitOfWork(session_factory) as uow:
         stored = uow.emails.list_for_quotation("Q7-PS-3")
     assert len(stored) == 1
+
+
+def test_a_failed_internal_email_can_be_retried_by_an_authorised_user(
+    service, approval_service, people, session_factory
+):
+    from tests.fixtures.phase7_helpers import FailingProvider
+
+    task = submit_quotation(service, approval_service, people, "Q7-RT-1")
+    provider = FailingProvider(failures=1)
+    emails = EmailService(
+        session_factory, config=email_config(), provider=provider
+    )
+    failed = emails.send_approval_request(task.id, user=people["sales"])
+    assert failed.status == EmailStatus.FAILED.value
+
+    retried = emails.retry_delivery(failed.id, user=people["sales"])
+    assert retried.status == EmailStatus.SENT.value
+    assert retried.id == failed.id
+
+
+def test_a_sent_email_cannot_be_retried(
+    service, approval_service, people, email_service
+):
+    task = submit_quotation(service, approval_service, people, "Q7-RT-2")
+    sent = email_service.send_approval_request(task.id, user=people["sales"])
+    with pytest.raises(EmailNotAllowedError):
+        email_service.retry_delivery(sent.id, user=people["sales"])
+
+
+def test_a_permanently_failed_email_is_not_retried(
+    service, approval_service, people, session_factory
+):
+    from app.emailing.contracts import DeliveryErrorCategory
+    from tests.fixtures.phase7_helpers import FailingProvider
+
+    task = submit_quotation(service, approval_service, people, "Q7-RT-3")
+    provider = FailingProvider(
+        failures=3, category=DeliveryErrorCategory.PERMANENT
+    )
+    emails = EmailService(
+        session_factory, config=email_config(), provider=provider
+    )
+    failed = emails.send_approval_request(task.id, user=people["sales"])
+    with pytest.raises(EmailNotAllowedError):
+        emails.retry_delivery(failed.id, user=people["sales"])
+    assert provider.attempts == 1
