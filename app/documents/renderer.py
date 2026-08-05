@@ -101,8 +101,8 @@ def safe_document_filename(
 ) -> str:
     """Build an output filename that cannot escape a directory."""
 
-    safe_id = re.sub(r"[^A-Za-z0-9._-]+", "-", str(quotation_id).strip())
-    safe_id = safe_id.strip(".-_")[:80] or "quotation"
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "-", str(quotation_id).strip())
+    safe_id = re.sub(r"-{2,}", "-", safe_id).strip("-_")[:80] or "quotation"
     safe_suffix = re.sub(r"[^a-z0-9]+", "", str(suffix).casefold()) or "pdf"
     return f"{safe_id}-v{int(quotation_version)}-quotation.{safe_suffix}"
 

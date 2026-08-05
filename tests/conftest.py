@@ -147,3 +147,10 @@ def reminder_worker(session_factory, email_service, email_config):
     return ApprovalReminderWorker(
         session_factory, email_service=email_service, config=email_config
     )
+
+
+@pytest.fixture()
+def document_service(session_factory, service):
+    from app.services.document_service import DocumentService
+
+    return DocumentService(session_factory, quotation_service=service)

@@ -38,6 +38,7 @@ from app.documents.context import (
     build_customer_document_context,
 )
 from app.documents.plan import (
+    ALLOWED_CHART_IDS,
     DEFAULT_SECTION_HEADINGS,
     DEFAULT_SECTION_IDS,
     DocumentPlan,
@@ -294,7 +295,7 @@ class DocumentService:
         request = DocumentPlanRequest(
             section_ids=DEFAULT_SECTION_IDS,
             section_headings=dict(DEFAULT_SECTION_HEADINGS),
-            customer_safe_facts=context.protected_values(),
+            allowed_chart_ids=ALLOWED_CHART_IDS,
         )
         try:
             outcome = agent.run(request)
