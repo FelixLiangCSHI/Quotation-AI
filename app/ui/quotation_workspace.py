@@ -34,14 +34,18 @@ from app.demo_scenarios import (
     load_demo_scenario,
 )
 from app.data_loader import load_snapshot, synthetic_snapshot_path
-from app.document_generator import generate_quotation_pdf
 from app.email_generator import (
-    generate_customer_email,
     generate_internal_approval_email,
     generate_reminder_email,
     generate_revision_email,
 )
+from app.emailing.contracts import EmailError
+from app.emailing.service import EmailService
 from app.output_context import APPROVED_STATUSES, OutputGenerationError
+from app.services.document_service import (
+    DocumentService,
+    DocumentServiceError,
+)
 from app.ingestion.pricing_source import resolve_pricing_source
 from app.pricing_data import PricingDataError
 from app.pricing_engine import PricingEngine
@@ -76,6 +80,7 @@ from app.recommender import (
     RecommendationItem,
 )
 from app.quotation_pricing import display_money, display_percent
+from app.quotation_value import resolve_commercial_value
 from app.workflow_orchestrator import (
     WorkflowOrchestrationError,
     analyse_quotation_lines,
@@ -508,7 +513,7 @@ def _current_step(state: QuotationWorkflowState) -> int:
         return 6
     if state.combined_decision is not None and not state.validation_stale:
         return 6
-    if state.pricing_result is not None:
+    if resolve_commercial_value(state).is_available:
         return 5
     if state.draft.selected_product_ids:
         return 4
@@ -523,7 +528,7 @@ def _render_stage_indicator(state: QuotationWorkflowState) -> None:
     has_product_details = bool(
         state.draft.product_query or state.product_recommendation
     )
-    pricing_available = state.pricing_result is not None
+    pricing_available = resolve_commercial_value(state).is_available
     validation_available = state.combined_decision is not None
     approval_available = state.approval.status != ApprovalStatus.NOT_READY
     output_available = state.approval.status in APPROVED_STATUSES
@@ -1148,15 +1153,11 @@ def _render_quotation_editor(
                 step=1,
                 value=state.draft.quantity,
             )
+            editor_value = resolve_commercial_value(state)
             proposed_default = (
                 state.draft.proposed_unit_price
                 if state.draft.proposed_unit_price is not None
-                else (
-                    state.pricing_result.recommended_unit_price
-                    if state.pricing_result
-                    and state.pricing_result.recommended_unit_price is not None
-                    else 0.0
-                )
+                else (editor_value.recommended_unit_price or 0.0)
             )
             use_price_override = st.checkbox(
                 "Use proposed unit-price override",
@@ -1528,20 +1529,17 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
         "Nothing is ever approved automatically.",
         icon=":material/policy:",
     )
-    recommended_price = state.pricing_result.recommended_unit_price
-    proposed_price = (
-        state.draft.proposed_unit_price
-        if state.draft.proposed_unit_price is not None
-        else recommended_price
-    )
+    value = resolve_commercial_value(state)
+    recommended_price = value.recommended_unit_price
+    proposed_price = value.final_unit_price
     approval_metrics = st.columns(3, gap="medium", border=True)
     approval_metrics[0].metric(
         "Recommended unit price",
-        _format_money(recommended_price, state.pricing_result.currency),
+        _format_money(recommended_price, value.currency),
     )
     approval_metrics[1].metric(
         "Proposed/final unit price",
-        _format_money(proposed_price, state.pricing_result.currency),
+        _format_money(proposed_price, value.currency),
     )
     approval_metrics[2].metric(
         "Validation decision",
@@ -1572,7 +1570,7 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
                 "**Final approved unit price**  \n:gray["
                 + _format_money(
                     approval.final_price,
-                    state.pricing_result.currency,
+                    value.currency,
                 )
                 + "]"
             )
@@ -1673,13 +1671,6 @@ def _render_output_stage(state: QuotationWorkflowState) -> None:
                 )
             )
 
-        quotation_pdf = None
-        if status in APPROVED_STATUSES:
-            customer_email = generate_customer_email(state)
-            quotation_pdf = generate_quotation_pdf(state)
-            state.customer_email = customer_email
-            previews.append(("Customer quotation", customer_email, "customer"))
-
         if previews:
             for tab, (title, email, preview_key) in zip(
                 st.tabs([title for title, _, _ in previews]),
@@ -1688,18 +1679,12 @@ def _render_output_stage(state: QuotationWorkflowState) -> None:
                 with tab:
                     _render_email_preview(email, state, preview_key)
 
-        if status in APPROVED_STATUSES and quotation_pdf is not None:
+        if status in APPROVED_STATUSES:
             st.divider()
             st.subheader("H. Documents and audit")
             _render_customer_quotation_preview(state)
-            st.download_button(
-                "Download quotation PDF",
-                data=quotation_pdf.bytes_data,
-                file_name=quotation_pdf.filename,
-                mime=quotation_pdf.mime_type,
-                icon=":material/picture_as_pdf:",
-                type="primary",
-            )
+            _render_customer_document(state)
+            _render_customer_email(state)
             _render_audit_exports(state, include_customer=True)
         elif status in {
             ApprovalStatus.REJECTED,
@@ -1723,6 +1708,176 @@ def _render_output_stage(state: QuotationWorkflowState) -> None:
         )
 
 
+def _render_customer_document(state: QuotationWorkflowState) -> None:
+    """Generate and download the persisted customer PDF.
+
+    The document is produced by :class:`DocumentService`, so every generation
+    and download is recorded in the database instead of living only in this
+    browser session.
+    """
+
+    st.markdown("#### Customer quotation document")
+    user = current_user(st.session_state)
+    if user is None:
+        st.warning(
+            "Sign in to generate the customer document.",
+            icon=":material/lock:",
+        )
+        return
+
+    quotation_id = state.draft.quotation_id
+    service = DocumentService()
+    try:
+        documents = service.list_documents(quotation_id, user=user)
+    except (DocumentServiceError, PermissionDeniedError) as error:
+        st.error(str(error), icon=":material/error:")
+        return
+    customer_documents = [
+        metadata
+        for metadata in documents
+        if metadata.audience == "customer" and metadata.status == "generated"
+    ]
+
+    if st.button(
+        "Generate customer PDF",
+        icon=":material/picture_as_pdf:",
+        type="primary",
+        key=f"generate_pdf_{quotation_id}",
+    ):
+        try:
+            service.generate_customer_pdf(quotation_id, user=user)
+        except (DocumentServiceError, PermissionDeniedError) as error:
+            st.error(
+                f"The customer document was not generated: {error}",
+                icon=":material/error:",
+            )
+        else:
+            st.rerun()
+
+    if not customer_documents:
+        st.info(
+            "No customer document has been generated yet.",
+            icon=":material/draft:",
+        )
+        return
+
+    for metadata in customer_documents:
+        with st.container(border=True):
+            st.caption(
+                f"{metadata.filename} · version {metadata.quotation_version} · "
+                f"{metadata.byte_size} bytes · checksum "
+                f"{metadata.file_hash[:12]}"
+            )
+            try:
+                generated = service.download_customer_document(
+                    metadata.document_id, user=user
+                )
+            except (DocumentServiceError, PermissionDeniedError) as error:
+                st.error(str(error), icon=":material/error:")
+                continue
+            st.download_button(
+                "Download quotation PDF",
+                data=generated.content,
+                file_name=generated.filename,
+                mime=generated.mime_type,
+                icon=":material/download:",
+                key=f"download_pdf_{metadata.document_id}",
+            )
+
+
+def _render_customer_email(state: QuotationWorkflowState) -> None:
+    """Draft, review and send the persisted customer email.
+
+    Composition and delivery both go through :class:`EmailService`, so the
+    Email centre shows the same records this page created.
+    """
+
+    st.markdown("#### Customer email")
+    user = current_user(st.session_state)
+    if user is None:
+        st.warning(
+            "Sign in to compose the customer email.",
+            icon=":material/lock:",
+        )
+        return
+
+    quotation_id = state.draft.quotation_id
+    draft_key = f"customer_email_draft_{quotation_id}"
+    emails = EmailService()
+    recipient = st.text_input(
+        "Customer email address",
+        key=f"customer_email_recipient_{quotation_id}",
+    ).strip()
+
+    if st.button(
+        "Create customer email draft",
+        icon=":material/drafts:",
+        key=f"draft_email_{quotation_id}",
+    ):
+        if not recipient:
+            st.error(
+                "A customer email address is required.",
+                icon=":material/error:",
+            )
+        else:
+            try:
+                st.session_state[draft_key] = emails.draft_customer_email(
+                    quotation_id,
+                    user=user,
+                    recipients=(recipient,),
+                )
+            except (EmailError, PermissionDeniedError) as error:
+                st.error(
+                    f"The customer email draft was refused: {error}",
+                    icon=":material/error:",
+                )
+            else:
+                st.rerun()
+
+    draft = st.session_state.get(draft_key)
+    if draft is None:
+        st.info(
+            "Create a draft, review the wording and then send it.",
+            icon=":material/mail:",
+        )
+        return
+
+    st.text_area(
+        "Draft for human review",
+        value=f"Subject: {draft.message.subject}\n\n{draft.message.body}",
+        height=260,
+        disabled=True,
+        key=f"customer_email_draft_body_{quotation_id}",
+    )
+    st.caption(
+        f"Status {draft.record.status} · recipients "
+        f"{', '.join(draft.message.recipients)} · provider "
+        f"{emails.provider.provider_name}"
+    )
+    approved = st.checkbox(
+        "I reviewed this draft and confirm it may be sent.",
+        key=f"customer_email_reviewed_{quotation_id}",
+    )
+    if st.button(
+        "Send customer email",
+        icon=":material/send:",
+        type="primary",
+        key=f"send_email_{quotation_id}",
+    ):
+        try:
+            record = emails.send_reviewed_customer_email(
+                draft, user=user, draft_approved=approved
+            )
+        except (EmailError, PermissionDeniedError) as error:
+            st.error(f"The email was not sent: {error}", icon=":material/error:")
+            return
+        st.success(
+            f"The customer email was recorded as {record.status}. It is "
+            "visible in the Email centre.",
+            icon=":material/mark_email_read:",
+        )
+
+
 def _render_email_preview(
     email: EmailOutput,
     state: QuotationWorkflowState,
@@ -1741,16 +1896,16 @@ def _render_email_preview(
 
 
 def _render_customer_quotation_preview(state: QuotationWorkflowState) -> None:
-    pricing = state.pricing_result
-    if pricing is None:
+    value = resolve_commercial_value(state)
+    if not value.is_available:
         st.error(
             "Current pricing is required for the quotation preview.",
             icon=":material/error:",
         )
         return
-    final_price = state.approval.final_price
+    final_price = value.final_unit_price
     total = (
-        final_price * state.draft.quantity
+        final_price * value.quantity
         if final_price is not None
         else None
     )
@@ -1758,11 +1913,17 @@ def _render_customer_quotation_preview(state: QuotationWorkflowState) -> None:
     st.dataframe(
         [
             {
-                "Product ID": ", ".join(state.draft.selected_product_ids),
+                "Product ID": ", ".join(
+                    state.draft.selected_product_ids
+                    or [
+                        line.product_id or line.description
+                        for line in state.draft.line_items
+                    ]
+                ),
                 "Description": state.draft.product_query,
-                "Quantity": state.draft.quantity,
-                "Unit price": _format_money(final_price, pricing.currency),
-                "Total": _format_money(total, pricing.currency),
+                "Quantity": value.quantity,
+                "Unit price": _format_money(final_price, value.currency),
+                "Total": _format_money(total, value.currency),
                 "Incoterm": state.draft.incoterm,
             }
         ],

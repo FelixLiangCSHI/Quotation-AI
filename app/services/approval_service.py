@@ -45,6 +45,7 @@ from app.quotation_models import (
     WorkflowStage,
     utc_now,
 )
+from app.quotation_value import resolve_commercial_value
 from app.services.quotation_service import LoadedQuotation, QuotationService
 from app.services.unit_of_work import UnitOfWork
 from app.workflow_state import append_audit_event
@@ -567,11 +568,8 @@ class ApprovalService:
                         f"{decision.threshold_percent}%."
                     )
 
-            recommended_price = (
-                None
-                if state.pricing_result is None
-                else state.pricing_result.recommended_unit_price
-            )
+            commercial_value = resolve_commercial_value(state)
+            recommended_price = commercial_value.recommended_unit_price
             final_price = (
                 float(final_unit_price)
                 if final_unit_price is not None

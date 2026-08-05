@@ -10,6 +10,7 @@ from app.quotation_models import (
     QuotationWorkflowState,
     utc_now,
 )
+from app.quotation_value import resolve_commercial_value
 
 
 APPROVED_STATUSES = frozenset(
@@ -51,26 +52,14 @@ class QuotationOutputContext:
     margin_summary: str
 
 
-def _multi_line_pricing_basis(
+def _multi_line_identity(
     state: QuotationWorkflowState,
-) -> tuple[float, list[str], str, str] | None:
-    """Derive an output basis from a line-item-only quotation.
+) -> tuple[list[str], str]:
+    """Product identifiers and description for a multi-line quotation.
 
-    Legacy quotations carry a single-product ``pricing_result``. A multi-line
-    quotation is priced by ``quotation_pricing`` instead, so the customer-facing
-    context is derived from the quotation total. Only customer-visible values
-    (revenue, currency, product identifiers) are used; cost and margin are not.
+    Only customer-visible values are used; cost and margin are not.
     """
 
-    analysis = state.quotation_pricing
-    if analysis is None or not state.draft.line_items:
-        return None
-    if analysis.total_revenue is None:
-        return None
-    quantity = max(int(state.draft.quantity), 1)
-    total_revenue = float(analysis.total_revenue)
-    if total_revenue <= 0:
-        return None
     product_ids = [
         line.product_id or line.description
         for line in state.draft.line_items
@@ -83,8 +72,7 @@ def _multi_line_pricing_basis(
             if line.description or line.product_id
         )
     )
-    currency = analysis.currency or state.draft.currency or "USD"
-    return total_revenue / quantity, product_ids, description, currency
+    return product_ids, description
 
 
 def build_output_context(
@@ -95,14 +83,8 @@ def build_output_context(
     validity_days: int = DEMO_QUOTATION_VALIDITY_DAYS,
 ) -> QuotationOutputContext:
     pricing = state.pricing_result
-    multi_line = (
-        _multi_line_pricing_basis(state)
-        if pricing is None or pricing.recommended_unit_price is None
-        else None
-    )
-    if multi_line is None and (
-        pricing is None or pricing.recommended_unit_price is None
-    ):
+    value = resolve_commercial_value(state)
+    if not value.is_available:
         raise OutputGenerationError(
             "Current pricing is required before generating quotation outputs."
         )
@@ -117,20 +99,17 @@ def build_output_context(
     if state.draft.quantity <= 0:
         raise OutputGenerationError("Quotation quantity must be greater than zero.")
 
-    if multi_line is None:
-        recommended_price = float(pricing.recommended_unit_price)
+    recommended_price = float(value.recommended_unit_price)
+    currency = value.currency
+    if value.source == "single_product" and pricing is not None:
         multi_line_product_ids: list[str] = []
         multi_line_description = ""
-        currency = pricing.currency or state.draft.currency
         confidence = pricing.confidence_label or "Not available"
         margin = pricing.gross_margin_percent
     else:
-        (
-            recommended_price,
-            multi_line_product_ids,
-            multi_line_description,
-            currency,
-        ) = multi_line
+        multi_line_product_ids, multi_line_description = _multi_line_identity(
+            state
+        )
         confidence = "Deterministic multi-line quotation total"
         margin = None
     final_price = (

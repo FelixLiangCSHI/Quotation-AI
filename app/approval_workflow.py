@@ -10,6 +10,7 @@ from app.quotation_models import (
     WorkflowStage,
     utc_now,
 )
+from app.quotation_value import resolve_commercial_value
 from app.workflow_state import append_audit_event
 
 
@@ -82,15 +83,7 @@ def _approvable_unit_price(state: QuotationWorkflowState) -> float | None:
     revenue per unit is used instead. Cost and margin are never involved.
     """
 
-    pricing = state.pricing_result
-    if pricing is not None and pricing.recommended_unit_price is not None:
-        return float(pricing.recommended_unit_price)
-    analysis = state.quotation_pricing
-    if analysis is None or analysis.total_revenue is None:
-        return None
-    quantity = max(int(state.draft.quantity), 1)
-    revenue = float(analysis.total_revenue)
-    return revenue / quantity if revenue > 0 else None
+    return resolve_commercial_value(state).recommended_unit_price
 
 
 def available_approval_actions(

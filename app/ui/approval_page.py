@@ -156,6 +156,41 @@ def render(user) -> None:
     """Render the approval inbox for an already authenticated user."""
 
     st.title(":material/approval: Approval Center")
+    if not user.has_permission(Permission.VIEW_APPROVAL_TASKS):
+        st.error(
+            "Your role does not include approval review.",
+            icon=":material/block:",
+        )
+        return
+
+    service = ApprovalService()
+    try:
+        tasks = service.list_tasks(user)
+    except PermissionDeniedError as error:
+        st.error(str(error), icon=":material/block:")
+        return
+    if not tasks:
+        st.info(
+            "No approval task is waiting for you. Tasks appear here as soon "
+            "as a sales user submits a quotation that needs your decision.",
+            icon=":material/inbox:",
+        )
+        return
+
+    st.caption(
+        f"{len(tasks)} task(s) awaiting your decision. Cost, margin and "
+        "threshold shown below are internal information and never reach the "
+        "customer document."
+    )
+
+    for task in tasks:
+        with st.container(border=True):
+            try:
+                view = service.get_task_view(user, task.id)
+            except ApprovalServiceError as error:
+                st.error(str(error), icon=":material/error:")
+                continue
+            _render_task(service, user, view)
 
 
 def render_history(user) -> None:
@@ -200,36 +235,3 @@ def render_history(user) -> None:
         use_container_width=True,
         hide_index=True,
     )
-
-    if not user.has_permission(Permission.VIEW_APPROVAL_TASKS):
-        st.error(
-            "Your role does not include approval review.",
-            icon=":material/block:",
-        )
-        return
-
-    service = ApprovalService()
-    tasks = service.list_tasks(user)
-    if not tasks:
-        st.info(
-            "No approval task is waiting for you. Tasks appear here as soon "
-            "as a sales user submits a quotation that needs your decision.",
-            icon=":material/inbox:",
-        )
-        return
-
-    st.caption(
-        f"{len(tasks)} task(s) awaiting your decision. Cost, margin and "
-        "threshold shown below are internal information and never reach the "
-        "customer document."
-    )
-
-    for task in tasks:
-        with st.container(border=True):
-            try:
-                view = service.get_task_view(user, task.id)
-            except ApprovalServiceError as error:
-                st.error(str(error), icon=":material/error:")
-                continue
-            _render_task(service, user, view)
-
