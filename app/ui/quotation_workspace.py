@@ -69,8 +69,12 @@ from app.requirement_fields import (
     ALLOWED_INCOTERMS,
 )
 from app.requirement_intake import pending_confirmations
-from app.recommender import QuoteRecommendation, RecommendationItem
-from app.recommender import QuoteRecommender
+from app.recommender import (
+    SELECTION_CONFIRMATION_THRESHOLD,
+    QuoteRecommendation,
+    QuoteRecommender,
+    RecommendationItem,
+)
 from app.quotation_pricing import display_money, display_percent
 from app.workflow_orchestrator import (
     WorkflowOrchestrationError,
@@ -963,6 +967,50 @@ def _render_main_draft(draft: QuotationDraft) -> None:
         )
 
 
+def _render_selection_confidence(
+    recommendation: QuoteRecommendation,
+    already_selected: bool,
+) -> None:
+    """Show why the选型 was applied automatically or needs confirmation."""
+
+    confidence = recommendation.selection_confidence
+    if not recommendation.requires_confirmation:
+        message = (
+            f"Selection confidence {confidence:.0%} — applied automatically. "
+            "Choose a different product below to change it."
+            if already_selected
+            else f"Selection confidence {confidence:.0%} — high enough to "
+            "apply without confirmation."
+        )
+        st.success(message, icon=":material/verified:")
+        return
+    st.warning(
+        f"Selection confidence {confidence:.0%} is below the "
+        f"{SELECTION_CONFIRMATION_THRESHOLD:.0%} threshold"
+        + (
+            " and the rule check reported a blocking issue"
+            if recommendation.validation.status == "invalid"
+            else ""
+        )
+        + ". Please confirm the product before pricing.",
+        icon=":material/help:",
+    )
+
+
+def _render_decision_tree_evidence(main_model) -> None:
+    """Show the decision-tree facts the选型 is based on."""
+
+    if not main_model.evidence:
+        return
+    with st.expander(
+        "Decision tree basis",
+        expanded=False,
+        icon=":material/account_tree:",
+    ):
+        for line in main_model.evidence:
+            st.markdown(f"- {line}")
+
+
 def _render_product_selection(
     state: QuotationWorkflowState,
     recommendation: QuoteRecommendation,
@@ -976,6 +1024,11 @@ def _render_product_selection(
         return
 
     main_model = recommendation.main_model
+    already_selected = (
+        bool(state.draft.selected_product_ids)
+        and main_model is not None
+        and state.draft.selected_product_ids[0] == main_model.product_id
+    )
     if main_model:
         st.markdown(
             f"**Recommended**  \n{main_model.short_description}  \n"
@@ -985,6 +1038,8 @@ def _render_product_selection(
             f"Why this product: {main_model.reason}",
             icon=":material/lightbulb:",
         )
+        _render_selection_confidence(recommendation, already_selected)
+        _render_decision_tree_evidence(main_model)
     if recommendation.accessories:
         with st.expander(
             "Configured supporting components",
@@ -994,8 +1049,10 @@ def _render_product_selection(
             for item in recommendation.accessories:
                 st.markdown(
                     f"- **{item.short_description}** (`{item.product_id}`)  \n"
-                    f"  :gray[{item.reason}]"
+                    f"  :gray[{item.reason} · confidence {item.confidence:.0%}]"
                 )
+                for line in item.evidence:
+                    st.caption(f"  · {line}")
     if recommendation.alternatives:
         st.caption("Alternatives are available in the selector below.")
 
@@ -1008,8 +1065,13 @@ def _render_product_selection(
         ),
         key=f"product_choice_{state.draft.quotation_id}",
     )
+    button_label = (
+        "Confirm this product"
+        if recommendation.requires_confirmation
+        else "Use selected product"
+    )
     if st.button(
-        "Use selected product",
+        button_label,
         type="primary",
         icon=":material/check:",
     ):

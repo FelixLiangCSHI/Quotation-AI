@@ -45,6 +45,10 @@ implicitly:
    macros are never executed. Sheets are read with formula evaluation disabled,
    so a spreadsheet formula can never run.
 2. **Map columns.** A suggested mapping is offered; you confirm or correct it.
+   For a desensitised `SAP_archived` price-list export use the dedicated
+   **1b. Upload SAP archived export** tab instead: it recognises the wide cost
+   breakdown and supplies the missing currency column as a constant, then
+   continues through exactly the same review, publish and activate steps.
 3. **Review.** Normalisation and row validation produce a report with accepted,
    warning and rejected rows. Rejected rows are quarantined with a reason, and
    you can export the report as CSV or Markdown.

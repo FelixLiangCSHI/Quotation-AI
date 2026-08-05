@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from app.approval_workflow import prepare_approval
 from app.commercial_policy import (
     CommercialPolicyVersion,
@@ -47,6 +49,7 @@ def process_requirement_message(
     state.draft = result.updated_draft
     state.product_recommendation = result.product_recommendation
     state.current_stage = state.draft.status
+    result = _auto_apply_confident_selection(state, result, agent)
     if result.changed_fields:
         invalidate_validation_outputs(state, clear_pricing=True)
         append_audit_event(
@@ -59,6 +62,55 @@ def process_requirement_message(
             details={"changed_fields": list(result.changed_fields)},
         )
     return result
+
+
+def _auto_apply_confident_selection(
+    state: QuotationWorkflowState,
+    result: ConversationTurnResult,
+    agent: RequirementConversationAgent,
+) -> ConversationTurnResult:
+    """Apply a confident选型 without asking; only confirm when unsure.
+
+    The user is asked to confirm a product only when the deterministic
+    recommendation is below the confidence threshold, has a blocking rule
+    issue, or does not exist. A confident, rule-clean proposal is applied
+    directly and remains fully reversible from the product selector.
+    """
+
+    recommendation = result.product_recommendation
+    if recommendation is None or recommendation.requires_confirmation:
+        return result
+    main_model = recommendation.main_model
+    if main_model is None or state.draft.selected_product_ids:
+        return result
+
+    try:
+        state.draft = agent.select_product(
+            state.draft, main_model.product_id, recommendation
+        )
+    except ValueError:
+        return result
+    state.current_stage = state.draft.status
+    notice = (
+        f"Selected {main_model.short_description} "
+        f"({main_model.product_id}) automatically because the选型 confidence "
+        f"is {main_model.confidence:.0%}. You can change it at any time."
+    )
+    return replace(
+        result,
+        updated_draft=state.draft,
+        changed_fields=tuple(
+            dict.fromkeys((*result.changed_fields, "selected_product_ids"))
+        ),
+        missing_fields=tuple(state.draft.missing_fields),
+        notices=(*result.notices, notice),
+        ready_for_analysis=state.draft.status == WorkflowStage.READY_FOR_ANALYSIS,
+        next_question=(
+            None
+            if state.draft.status == WorkflowStage.READY_FOR_ANALYSIS
+            else result.next_question
+        ),
+    )
 
 
 def apply_structured_requirements(

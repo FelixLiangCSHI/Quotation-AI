@@ -48,6 +48,32 @@ example `Material`, `MATNR`, `Cat#` and `SKU` all map to `product_id`). A
 deployment can supply additional aliases at call time without a code change,
 and a user can always override any suggestion in the mapping UI.
 
+## Archived SAP price-list layout
+
+The desensitised `SAP_archived` export is a *wide* price list: one row per
+catalogue number with the whole cost breakdown in columns (`COGS`,
+`Installation COGS`, `Warranty COGS`, `COGS I&W`, `Freight`, `Duty`, `Tariff`,
+`Transfer Price`, service costs) and **no currency column** — the whole
+workbook is denominated in `SAP_BASE_CURRENCY`.
+
+Two mechanisms make that layout mappable without weakening the pipeline:
+
+* `ColumnMappingProfile.constant_values` supplies a field that is constant for
+  the whole file (here, the currency) instead of a column. A constant satisfies
+  a required field, is applied to every row before normalisation, and cannot be
+  set for a field that is also mapped to a column.
+* `app/ingestion/sap_archived.py` records the archived header aliases and the
+  currency constant once, and plans every populated sheet as a pricing dataset.
+
+Upload it from the **1b. Upload SAP archived export** tab of the pricing data
+page. Sheets that do not match the layout are reported, not silently dropped.
+Everything after the mapping is the ordinary pipeline: normalisation,
+validation, quarantine, explicit confirmation, publication and activation.
+
+The pricing dataset therefore carries the full cost breakdown through to
+`app/ingestion/pricing_source.py`, so the pricing engine (and the Agent 2
+explanation built on it) sees a complete cost basis rather than COGS alone.
+
 ## Validation rules
 
 | Check | Severity |

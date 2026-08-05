@@ -104,6 +104,42 @@ COST_ROWS: tuple[tuple[Any, ...], ...] = (
 )
 
 
+#: The desensitised archived SAP price-list layout: a wide cost breakdown and
+#: no currency column at all.
+ARCHIVED_HEADERS = (
+    "Vertical",
+    "LOB",
+    "Prod Type",
+    "Prod Family",
+    "Cat#",
+    "Description",
+    "List Price",
+    "Net Price",
+    "Minimum Price",
+    "Transfer Price",
+    "COGS",
+    "Installation COGS",
+    "Warranty COGS",
+    "COGS I&W",
+    "Freight",
+    "Duty",
+    "Tariff",
+)
+
+ARCHIVED_ROWS: tuple[tuple[Any, ...], ...] = (
+    ("Imaging", "XR", "System", "FMT", "SYN-100", "Synthetic imaging system",
+     120000, 100000, 80000, 70000, 60000, 4000, 2000, 66000, 1500, 900, 300),
+    ("Imaging", "XR", "Option", "DET", "SYN-200", "Synthetic detector panel",
+     30000, 25000, 20000, 17000, 15000, 800, 400, 16200, 300, 150, 50),
+)
+
+
+def archived_workbook() -> bytes:
+    """A desensitised archived SAP price-list export."""
+
+    return _build({"Compass CSI WW": (ARCHIVED_HEADERS, ARCHIVED_ROWS)})
+
+
 def _build(
     sheets: Mapping[str, tuple[Sequence[str], Sequence[Sequence[Any]]]],
 ) -> bytes:
@@ -300,6 +336,7 @@ FIXTURES = {
     "unknown_products.xlsx": unknown_products_workbook,
     "invalid_quotations.xlsx": invalid_quotations_workbook,
     "inconsistent_units.xlsx": inconsistent_units_workbook,
+    "sap_archived.xlsx": archived_workbook,
 }
 
 

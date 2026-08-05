@@ -24,12 +24,25 @@ from app.ingestion.repository import (
 from app.ingestion.schemas import DatasetKind
 from app.pricing_data import PricingRecord, load_pricing_records
 
+#: Canonical pricing fields copied onto :class:`app.pricing_data.PricingRecord`.
+#: The archived SAP export carries the full cost breakdown, which the pricing
+#: engine needs to build a complete cost basis instead of COGS alone.
 MONEY_FIELDS = (
     "list_price",
     "net_price",
     "minimum_price",
     "transfer_price",
     "cogs",
+    "installation_cogs",
+    "warranty_cogs",
+    "cogs_installation_warranty",
+    "cogs_moving_average",
+    "freight",
+    "duty",
+    "tariff",
+    "service_net_price",
+    "service_cogs",
+    "app_cogs",
 )
 
 
