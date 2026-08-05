@@ -73,7 +73,7 @@ proxy responsibility and are not set by the application.
 | Normal approve unavailable at or below the threshold | Present | `allowed_actions_for` |
 | Policy-version staleness guard on approval | Present | `ApprovalService.act` |
 | Administrator-only pricing-data publish and activate | Present | `app/services/pricing_data_admin.py` |
-| Administrator-only view of the pricing data import page | Present | `pages/1_Pricing_data_import.py` |
+| Administrator-only view of the pricing data import page | Present | `app/ui/pricing_data_page.py` |
 | Document generation and download are permission-checked and audited | Present | `DocumentService` |
 | Internal audit export requires `view_audit_records` | Present | `export_internal_audit_document` |
 

@@ -16,7 +16,7 @@ upload
  -> normalisation        (app/ingestion/normalization.py)
  -> row validation       (app/ingestion/validation.py)
  -> error quarantine     (rejected rows are stored separately)
- -> user confirmation    (pages/1_Pricing_data_import.py)
+ -> user confirmation    (app/ui/pricing_data_page.py)
  -> publication          (app/ingestion/repository.py)
  -> explicit activation  (a second, separate action)
 ```

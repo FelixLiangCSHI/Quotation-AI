@@ -75,7 +75,7 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
 app/                 Core Python application code
 app/agents/          Provider-neutral AI agent slots for Agent 1-4
 app/ingestion/       Offline SAP Excel ingestion pipeline (no live SAP link)
-pages/               Additional Streamlit pages (pricing data import)
+app/ui/             Streamlit presentation layer (login, navigation, pages)
 frontend/            Static web frontend
 rules/               Confirmed, merged, normalized, and review-needed rules
 docs/                Project documentation and meeting/supporting materials
@@ -85,7 +85,7 @@ quotation_snapshot.json  Source snapshot used by the MVP
 requirements.txt     Streamlit runtime dependencies
 requirements-api.txt Optional FastAPI backend dependencies
 runtime.txt          Streamlit Community Cloud Python version
-streamlit_app.py     Streamlit prototype entry point
+streamlit_app.py     Streamlit entry point: login gate and role-based routing
 ```
 
 ## Requirements
@@ -169,7 +169,33 @@ Streamlit secret files are ignored by Git. The current application does not load
 `.env` automatically or require credentials.
 
 `streamlit_app.py` is the only authoritative Streamlit Community Cloud entry
-point.
+point. It is the application shell: it renders the login page, enforces the
+idle-session timeout and routes each signed-in user to the workspaces their
+role permits. No business workflow is reachable before signing in.
+
+## Roles and workspaces
+
+The sidebar is derived from the signed-in user's permissions, so two roles
+never see the same starting page.
+
+| Role | Starting page | Workspaces |
+| --- | --- | --- |
+| Sales user | Quotation creation dashboard | Dashboard, Create Quotation, My Quotations, Documents, Email Centre |
+| Sales manager | Approval center | Dashboard, My Quotations, Approval Center, Approval History, Documents, Email Centre |
+| Pricing manager | Pricing and policy control | The approver workspaces plus Policy Management |
+| Administrator | Administration console | Dashboard, Approval Center/History, Pricing Data, Policy, User Management, System Configuration, Documents, Email Centre, Audit |
+
+Cost, margin, policy thresholds and approval rules are internal information
+and appear only in the internal workspaces. A customer document contains the
+approved quotation only.
+
+Sessions end automatically after 30 minutes of inactivity. Set
+`UI_IDLE_TIMEOUT_MINUTES` to change the window. Sign out is always available in
+the sidebar.
+
+For a demo, seed one account per role with
+`python -m app.auth.demo_accounts` and use the **Demo role** dropdown on the
+login page to pre-fill each username.
 
 ## Integrated Demo Workflow
 

@@ -114,11 +114,11 @@ task cancellation and customer output generation.
 
 Audit records never contain credentials. `AuditViewService` requires
 `VIEW_AUDIT_RECORDS` and additionally redacts any credential-shaped key before
-the record is displayed. The read-only audit page is `pages/3_Audit_trail.py`.
+the record is displayed. The read-only audit page is `app/ui/audit_page.py`.
 
 ## 8. Approver page
 
-`pages/2_Approval_inbox.py` is authenticated and shows, for each pending task,
+`app/ui/approval_page.py` is authenticated and shows, for each pending task,
 the quotation owner, customer, quotation version, the multi-line configuration,
 total revenue, total cost where the role permits it, gross margin, the active
 provisional threshold, the PASS / REVIEW_REQUIRED / BLOCKED decision, the

@@ -132,6 +132,7 @@ only names the variable that holds them.
 | `DATABASE_URL` | SQLAlchemy URL. PostgreSQL for internal MVP, SQLite for development |
 | `DATABASE_ECHO` | Echo SQL to stderr. Development troubleshooting only |
 | `DEMO_MODE`, `SHOW_INTERNAL_COSTS`, `ENABLE_LLM`, `PRICING_DATA_MODE` | Local demo behaviour |
+| `UI_IDLE_TIMEOUT_MINUTES` | Idle minutes before a signed-in session expires. Default 30 |
 
 ### Offline Excel ingestion
 

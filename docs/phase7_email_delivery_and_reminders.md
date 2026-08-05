@@ -15,7 +15,7 @@ persistent reminder worker.
 | Delivery persistence and use cases | `app/emailing/service.py`, `EmailRecord` |
 | Reminder scheduling | `app/services/approval_service.py` (due time), `app/emailing/reminders.py` (worker) |
 | Process entry point | `worker/reminder_worker.py` |
-| Read-only operator views | `pages/4_Email_centre.py` |
+| Read-only operator views | `app/ui/email_page.py` |
 
 Every trusted value — quotation ID and version, customer, product IDs and
 descriptions, quantities, prices, total revenue, gross margin, policy
