@@ -74,6 +74,25 @@ def prepare_approval(state: QuotationWorkflowState) -> ApprovalRecord:
     return state.approval
 
 
+def _approvable_unit_price(state: QuotationWorkflowState) -> float | None:
+    """The trusted unit price an approval decision is recorded against.
+
+    A legacy single-product quotation uses the recommended price. A multi-line
+    quotation has no single recommended price, so the deterministic quotation
+    revenue per unit is used instead. Cost and margin are never involved.
+    """
+
+    pricing = state.pricing_result
+    if pricing is not None and pricing.recommended_unit_price is not None:
+        return float(pricing.recommended_unit_price)
+    analysis = state.quotation_pricing
+    if analysis is None or analysis.total_revenue is None:
+        return None
+    quantity = max(int(state.draft.quantity), 1)
+    revenue = float(analysis.total_revenue)
+    return revenue / quantity if revenue > 0 else None
+
+
 def available_approval_actions(
     state: QuotationWorkflowState,
 ) -> tuple[str, ...]:
@@ -141,7 +160,7 @@ def submit_approval_action(
             "A reason is required for override, revision, or rejection."
         )
 
-    recommended_price = state.pricing_result.recommended_unit_price
+    recommended_price = _approvable_unit_price(state)
     if recommended_price is None:
         raise InvalidApprovalTransitionError(
             "A recommended price is required before approval."

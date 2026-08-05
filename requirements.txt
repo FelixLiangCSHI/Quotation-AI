@@ -1,7 +1,17 @@
+# Streamlit Community Cloud runtime dependencies (Phase 9).
+#
+# Every package here is pure Python or ships manylinux wheels, so no
+# system-level library (no cairo, pango, gobject, browser engine or database
+# server) is required. Lower bounds are pinned for reproducibility; upper
+# bounds prevent an unattended major-version break on a redeploy.
 streamlit>=1.49,<2
-openpyxl>=3.1.5,<4
-reportlab>=4.2.2,<5
 SQLAlchemy>=2.0,<3
 alembic>=1.13,<2
 pydantic>=2.7,<3
 Jinja2>=3.1.6,<4
+# Offline SAP .xlsx/.xlsm pricing ingestion.
+openpyxl>=3.1.5,<4
+# Pure-Python PDF engine. WeasyPrint and Playwright are intentionally NOT
+# required: they need system libraries or a browser download that Streamlit
+# Community Cloud cannot provide. The renderer falls back to ReportLab.
+reportlab>=4.2.2,<5

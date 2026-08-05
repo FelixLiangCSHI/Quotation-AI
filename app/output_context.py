@@ -51,6 +51,42 @@ class QuotationOutputContext:
     margin_summary: str
 
 
+def _multi_line_pricing_basis(
+    state: QuotationWorkflowState,
+) -> tuple[float, list[str], str, str] | None:
+    """Derive an output basis from a line-item-only quotation.
+
+    Legacy quotations carry a single-product ``pricing_result``. A multi-line
+    quotation is priced by ``quotation_pricing`` instead, so the customer-facing
+    context is derived from the quotation total. Only customer-visible values
+    (revenue, currency, product identifiers) are used; cost and margin are not.
+    """
+
+    analysis = state.quotation_pricing
+    if analysis is None or not state.draft.line_items:
+        return None
+    if analysis.total_revenue is None:
+        return None
+    quantity = max(int(state.draft.quantity), 1)
+    total_revenue = float(analysis.total_revenue)
+    if total_revenue <= 0:
+        return None
+    product_ids = [
+        line.product_id or line.description
+        for line in state.draft.line_items
+        if line.product_id or line.description
+    ]
+    description = "; ".join(
+        dict.fromkeys(
+            line.description or line.product_id
+            for line in state.draft.line_items
+            if line.description or line.product_id
+        )
+    )
+    currency = analysis.currency or state.draft.currency or "USD"
+    return total_revenue / quantity, product_ids, description, currency
+
+
 def build_output_context(
     state: QuotationWorkflowState,
     *,
@@ -59,7 +95,14 @@ def build_output_context(
     validity_days: int = DEMO_QUOTATION_VALIDITY_DAYS,
 ) -> QuotationOutputContext:
     pricing = state.pricing_result
-    if pricing is None or pricing.recommended_unit_price is None:
+    multi_line = (
+        _multi_line_pricing_basis(state)
+        if pricing is None or pricing.recommended_unit_price is None
+        else None
+    )
+    if multi_line is None and (
+        pricing is None or pricing.recommended_unit_price is None
+    ):
         raise OutputGenerationError(
             "Current pricing is required before generating quotation outputs."
         )
@@ -74,7 +117,22 @@ def build_output_context(
     if state.draft.quantity <= 0:
         raise OutputGenerationError("Quotation quantity must be greater than zero.")
 
-    recommended_price = float(pricing.recommended_unit_price)
+    if multi_line is None:
+        recommended_price = float(pricing.recommended_unit_price)
+        multi_line_product_ids: list[str] = []
+        multi_line_description = ""
+        currency = pricing.currency or state.draft.currency
+        confidence = pricing.confidence_label or "Not available"
+        margin = pricing.gross_margin_percent
+    else:
+        (
+            recommended_price,
+            multi_line_product_ids,
+            multi_line_description,
+            currency,
+        ) = multi_line
+        confidence = "Deterministic multi-line quotation total"
+        margin = None
     final_price = (
         float(state.approval.final_price)
         if state.approval.final_price is not None
@@ -90,22 +148,28 @@ def build_output_context(
         if state.approval.timestamp is not None
         else utc_now().date()
     )
-    product_ids = state.draft.selected_product_ids or pricing.selected_product_ids
+    product_ids = (
+        state.draft.selected_product_ids
+        or (list(pricing.selected_product_ids) if pricing is not None else [])
+        or multi_line_product_ids
+    )
     if not product_ids:
         raise OutputGenerationError(
             "A selected product is required before generating quotation outputs."
         )
     review_reasons = _review_reasons(state)
     decision = state.combined_decision
-    margin = pricing.gross_margin_percent
 
     return QuotationOutputContext(
         quotation_id=state.draft.quotation_id,
         customer_name=state.draft.customer_name or "Customer",
         product_id=", ".join(product_ids),
-        product_description=_selected_product_description(state, product_ids),
+        product_description=(
+            multi_line_description
+            or _selected_product_description(state, product_ids)
+        ),
         quantity=state.draft.quantity,
-        currency=pricing.currency or state.draft.currency,
+        currency=currency,
         recommended_unit_price=_money(recommended_price),
         final_unit_price=_money(final_price),
         total_price=_money(final_price * state.draft.quantity),
@@ -122,7 +186,7 @@ def build_output_context(
         delivery_location=state.draft.delivery_location or "Not specified",
         delivery_assumption=_delivery_assumption(state),
         incoterm=state.draft.incoterm or "To be confirmed",
-        confidence=pricing.confidence_label or "Not available",
+        confidence=confidence,
         validation_status=decision.status,
         review_reasons=review_reasons,
         requested_action=decision.recommended_next_action,

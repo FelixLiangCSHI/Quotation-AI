@@ -5,6 +5,13 @@ from typing import Any
 
 import streamlit as st
 
+from app.runtime import APP_VERSION, bootstrap_from_streamlit, runtime_report
+
+# Streamlit Cloud supplies configuration through secrets, so they must be
+# promoted to environment variables before any configuration module is
+# imported. Missing secrets are normal and leave the deterministic defaults.
+bootstrap_from_streamlit()
+
 from app.approval_workflow import (
     approval_reminder_status,
     prepare_approval,
@@ -25,8 +32,10 @@ from app.config import DEMO_MODE, PRICING_DATA_MODE, SHOW_INTERNAL_COSTS
 from app.conversation_agent import FIELD_QUESTIONS, RequirementConversationAgent
 from app.demo_scenarios import (
     DEMO_SCENARIOS,
+    MARGIN_GATE_SCENARIOS,
     SCENARIO_SESSION_KEY,
     apply_demo_price_profile,
+    build_margin_gate_state,
     load_demo_scenario,
 )
 from app.data_loader import load_snapshot, synthetic_snapshot_path
@@ -217,6 +226,10 @@ def main() -> None:
             st.subheader("D. Pricing analysis")
             with st.container(border=True):
                 _render_pricing_analysis(state, recommendation)
+        elif state.draft.line_items:
+            # Line-item-only quotations (including the margin gate demo
+            # scenarios) still reach the deterministic quotation-level gate.
+            _render_quotation_margin_gate(state)
         if state.combined_decision is not None and not state.validation_stale:
             _render_approval_panel(state)
         if state.approval.status != ApprovalStatus.NOT_READY:
@@ -394,9 +407,98 @@ def _render_sidebar(state: QuotationWorkflowState) -> None:
             st.rerun()
 
         st.divider()
+        _render_margin_gate_scenarios()
+
+        st.divider()
+        _render_startup_status()
+
+        st.divider()
         st.markdown("#### Draft summary")
         with st.container(border=True):
             _render_sidebar_draft(state.draft)
+
+
+def _render_startup_status() -> None:
+    """Startup checks: version, active mode, storage and agent providers.
+
+    No secret value is displayed; only whether a key is present.
+    """
+
+    try:
+        report = runtime_report()
+    except Exception as error:  # noqa: BLE001 - status must never break the app
+        LOGGER.warning("Startup status unavailable (%s).", type(error).__name__)
+        st.caption(f"Application version {APP_VERSION}. Startup status unavailable.")
+        return
+
+    with st.expander("Startup status", expanded=False, icon=":material/info:"):
+        st.caption(f"Version {report.version} ({report.phase})")
+        st.caption(f"Active mode: {report.application_mode}")
+        st.caption(f"Pricing data mode: {report.pricing_data_mode}")
+        st.caption(f"Database mode: {report.database_mode}")
+        st.caption(f"Persistence: {report.database_persistence}")
+        st.markdown("**Agent providers**")
+        for agent in report.agents:
+            key_state = (
+                "API key present" if agent["api_key_present"] else "no API key"
+            )
+            st.caption(
+                f"{agent['label']}: {agent['provider']} — {agent['mode']} "
+                f"({key_state}; fallback: deterministic)"
+            )
+
+
+def _render_margin_gate_scenarios() -> None:
+    st.markdown("#### Margin gate demo scenarios")
+    st.caption(
+        "Synthetic multi-line quotations that exercise the deterministic "
+        "margin gate end to end."
+    )
+    scenario_by_name = {
+        scenario.name: scenario for scenario in MARGIN_GATE_SCENARIOS
+    }
+    selected_name = st.selectbox(
+        "Margin gate scenario",
+        options=list(scenario_by_name),
+        key="margin_gate_scenario",
+    )
+    scenario = scenario_by_name[selected_name]
+    st.caption(scenario.description)
+    if not st.button(
+        "Load margin gate scenario",
+        icon=":material/balance:",
+        use_container_width=True,
+    ):
+        return
+    try:
+        demo_state = build_margin_gate_state(scenario.scenario_id)
+        start_new_quotation(st.session_state, state=demo_state)
+    except Exception as error:  # noqa: BLE001 - a demo must never crash the app
+        LOGGER.warning(
+            "Margin gate scenario could not be loaded (%s).",
+            type(error).__name__,
+        )
+        st.error(
+            "The margin gate scenario could not be loaded.",
+            icon=":material/error:",
+        )
+        return
+    st.session_state.pop(SCENARIO_SESSION_KEY, None)
+    st.session_state.messages = [
+        {
+            "role": "user",
+            "content": f"Load {scenario.name} using synthetic demo values.",
+        },
+        {
+            "role": "assistant",
+            "content": (
+                "The synthetic line items are loaded. Run the multi-line "
+                "pricing and logical judgement to see the "
+                f"{scenario.expected_status.replace('_', ' ').upper()} outcome."
+            ),
+        },
+    ]
+    st.rerun()
 
 
 def _current_step(state: QuotationWorkflowState) -> int:
@@ -1658,8 +1760,22 @@ def _render_quotation_margin_gate(state: QuotationWorkflowState) -> None:
         icon=":material/balance:",
         disabled=not state.draft.line_items,
     ):
-        analyse_quotation_lines(state, get_pricing_engine())
-        judge_quotation(state)
+        try:
+            analyse_quotation_lines(state, get_pricing_engine())
+            judge_quotation(state)
+        except (
+            PricingDataError,
+            WorkflowOrchestrationError,
+            ValueError,
+        ) as error:
+            LOGGER.warning(
+                "Margin gate evaluation failed (%s).", type(error).__name__
+            )
+            st.error(
+                f"The margin gate could not be evaluated: {error}",
+                icon=":material/error:",
+            )
+            return
         _persist_and_rerun(
             state,
             event_type="commercial_decision_completed",
@@ -1875,5 +1991,25 @@ def _format_percent(value: float | None) -> str:
     return "Unavailable" if value is None else f"{value:.2f}%"
 
 
-if __name__ == "__main__":
-    main()
+def run() -> None:
+    """Entry point with a demo-safe error boundary.
+
+    A Streamlit demo must degrade rather than crash, so an unexpected error is
+    reported in the UI and the session can be restarted from the browser.
+    """
+
+    try:
+        main()
+    except st.errors.Error:
+        raise
+    except Exception as error:  # noqa: BLE001 - the demo must not crash
+        LOGGER.exception("Unhandled application error (%s).", type(error).__name__)
+        st.error(
+            "The demo hit an unexpected problem and stopped rendering this "
+            "page. Reload the page or start a new quotation to continue.",
+            icon=":material/error:",
+        )
+        st.caption(f"Error type: {type(error).__name__}")
+
+
+run()
