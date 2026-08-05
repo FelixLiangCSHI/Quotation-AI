@@ -9,7 +9,7 @@ import pytest
 
 from app.auth import AccountLockedError, AuthenticationError, Role
 from app.auth.provider import PermissionDeniedError
-from app.ingestion.config import IngestionConfig, load_ingestion_config
+from app.ingestion.config import IngestionConfig
 from app.ingestion.storage import LocalWorkbookStorage, WorkbookStorageError
 from app.ingestion.workbook import (
     UnsupportedWorkbookError,

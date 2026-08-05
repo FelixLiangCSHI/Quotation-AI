@@ -446,7 +446,6 @@ def test_scenario_h_customer_outputs_carry_no_internal_data(
 
     import json
 
-    from app.services.unit_of_work import UnitOfWork
 
     with UnitOfWork(document_service._session_factory) as uow:
         quotation = uow.quotations.get_by_quotation_id("Q8-H")

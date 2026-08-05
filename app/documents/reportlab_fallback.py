@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 from io import BytesIO
-from pathlib import Path
 from typing import Any, Mapping
 from xml.sax.saxutils import escape
 
@@ -26,7 +25,6 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas as pdf_canvas
 from reportlab.platypus import (
     Image,
-    PageBreak,
     Paragraph,
     SimpleDocTemplate,
     Spacer,

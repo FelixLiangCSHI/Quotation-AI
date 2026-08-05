@@ -30,7 +30,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
