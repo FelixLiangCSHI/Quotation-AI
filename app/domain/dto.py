@@ -154,10 +154,51 @@ class ApprovalTaskDTO:
     validation_run_id: str = ""
     decision: str = ""
     reason: str = ""
+    reminder_cycle: int = 0
+    reminder_sent_count: int = 0
+    reminder_last_sent_at: datetime | None = None
+    reminder_last_error_category: str = ""
+    reminder_attempt_count: int = 0
 
     @property
     def is_open(self) -> bool:
         return self.status == "pending_review"
+
+
+@dataclass(frozen=True)
+class EmailRecordDTO:
+    """A persisted email and its delivery outcome."""
+
+    id: int
+    email_id: str
+    quotation_reference: str
+    quotation_version: int
+    email_type: str
+    audience: str
+    sender: str
+    recipients: tuple[str, ...] = ()
+    cc_recipients: tuple[str, ...] = ()
+    bcc_recipients: tuple[str, ...] = ()
+    subject: str = ""
+    body: str = field(default="", metadata={"customer_visible": False})
+    body_hash: str = field(default="", metadata={"customer_visible": False})
+    body_storage_mode: str = "hash"
+    template_version: str = "v1"
+    agent_provider: str = "deterministic"
+    agent_fallback_used: bool = True
+    agent_fallback_reason: str = ""
+    delivery_provider: str = "console"
+    status: str = "drafted"
+    attempt_count: int = 0
+    approval_task_id: int | None = None
+    created_at: datetime | None = None
+    sent_at: datetime | None = None
+    last_error_category: str = "none"
+    last_error_detail: str = field(default="", metadata={"customer_visible": False})
+    idempotency_key: str = ""
+    provider_message_id: str = ""
+    attachment_document_ids: tuple[int, ...] = ()
+    reminder_cycle: int = 0
 
 
 @dataclass(frozen=True)

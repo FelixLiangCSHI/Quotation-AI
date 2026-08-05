@@ -15,7 +15,7 @@ bypass it:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
@@ -28,7 +28,6 @@ from app.approval_workflow import (
     ACTION_REJECT,
     ACTION_REQUEST_REVISION,
     InvalidApprovalTransitionError,
-    approval_reminder_due_at,
     prepare_approval,
 )
 from app.auth.provider import AuthenticatedUser, PermissionDeniedError
@@ -75,6 +74,22 @@ MANDATORY_REASON_ACTIONS = frozenset(
 )
 
 TASK_STATUS_PENDING = "pending_review"
+
+
+def compute_reminder_due_at(submitted_at: datetime) -> datetime:
+    """Submission time plus the configured reminder delay.
+
+    Imported lazily so the approval service keeps working when the email
+    configuration is absent.
+    """
+
+    try:
+        from app.emailing.config import load_email_config
+
+        delay_hours = load_email_config().reminder_delay_hours
+    except Exception:  # noqa: BLE001 - fall back to the documented two days
+        delay_hours = 48.0
+    return submitted_at + timedelta(hours=delay_hours)
 TASK_STATUS_CANCELLED_STALE = "cancelled_stale"
 
 #: The terminal states an approval task may reach.
@@ -233,9 +248,12 @@ class ApprovalService:
                 "The quotation is not ready for approval review."
             )
 
-        reminder_due_at = approval.reminder_due_at or approval_reminder_due_at(
-            state
-        )
+        submitted_at = utc_now()
+        # The reminder due time is calculated from the submission time and the
+        # configured delay (two calendar days by default) and is persisted, so
+        # it survives a web-process restart.
+        reminder_due_at = compute_reminder_due_at(submitted_at)
+        approval.reminder_due_at = reminder_due_at
         action_request_id = request_id or uuid4().hex
 
         with self._unit_of_work() as uow:
@@ -280,7 +298,7 @@ class ApprovalService:
                 quotation_version=updated.version,
                 decision_status=decision.status,
                 submitted_by_user_id=user.user_id,
-                submitted_at=utc_now(),
+                submitted_at=submitted_at,
                 policy_version_id=decision.policy_version_id,
                 pricing_run_id=decision.pricing_run_id,
                 validation_run_id=decision.technical_validation_run_id,

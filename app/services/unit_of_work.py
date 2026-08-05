@@ -15,6 +15,8 @@ from app.db.session import get_session_factory
 from app.repositories.sqlalchemy_repositories import (
     SqlAlchemyApprovalRepository,
     SqlAlchemyAuditEventRepository,
+    SqlAlchemyDocumentRepository,
+    SqlAlchemyEmailRepository,
     SqlAlchemyQuotationRepository,
     SqlAlchemyUserRepository,
 )
@@ -42,6 +44,8 @@ class UnitOfWork:
         self.quotations = SqlAlchemyQuotationRepository(self._session)
         self.audit_events = SqlAlchemyAuditEventRepository(self._session)
         self.approvals = SqlAlchemyApprovalRepository(self._session)
+        self.emails = SqlAlchemyEmailRepository(self._session)
+        self.documents = SqlAlchemyDocumentRepository(self._session)
         return self
 
     def __exit__(

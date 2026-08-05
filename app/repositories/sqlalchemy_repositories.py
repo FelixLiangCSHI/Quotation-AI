@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
+from hashlib import sha256
 from uuid import uuid4
 from typing import Any
 
@@ -19,6 +20,7 @@ from app.db import models
 from app.domain.dto import (
     ApprovalTaskDTO,
     AuditEventDTO,
+    EmailRecordDTO,
     LineItemDTO,
     LineItemType,
     QuotationDTO,
@@ -584,6 +586,98 @@ class SqlAlchemyApprovalRepository:
             self._session.flush()
         return tuple(cancelled)
 
+    # -- reminder scheduling -------------------------------------------
+
+    def list_due_reminders(
+        self,
+        *,
+        now: datetime,
+        max_reminders: int = 1,
+        limit: int = 50,
+    ) -> tuple[ApprovalTaskDTO, ...]:
+        """Return pending tasks whose reminder is due and not yet exhausted."""
+
+        statement = (
+            select(models.ApprovalTask)
+            .where(
+                models.ApprovalTask.status.in_(self.OPEN_STATUSES),
+                models.ApprovalTask.reminder_due_at.is_not(None),
+                models.ApprovalTask.reminder_due_at <= now,
+                models.ApprovalTask.reminder_sent_count < max_reminders,
+            )
+            .order_by(models.ApprovalTask.reminder_due_at)
+            .limit(limit)
+        )
+        return tuple(
+            _approval_task_dto(record)
+            for record in self._session.scalars(statement)
+        )
+
+    def claim_reminder(
+        self, *, task_id: int, now: datetime, max_reminders: int = 1
+    ) -> ApprovalTaskDTO | None:
+        """Lock and claim one task for reminder processing.
+
+        Returns ``None`` when the task is no longer eligible, so a second
+        worker observing the same row cannot send a duplicate reminder.
+        """
+
+        statement = select(models.ApprovalTask).where(
+            models.ApprovalTask.id == task_id
+        )
+        if (
+            self._session.bind is not None
+            and self._session.bind.dialect.name != "sqlite"
+        ):
+            statement = statement.with_for_update(skip_locked=True)
+        record = self._session.scalars(statement).one_or_none()
+        if record is None:
+            return None
+        if record.status not in self.OPEN_STATUSES:
+            return None
+        if record.reminder_due_at is None or record.reminder_due_at > now:
+            return None
+        if record.reminder_sent_count >= max_reminders:
+            return None
+        record.reminder_claimed_at = now
+        record.reminder_cycle = record.reminder_sent_count + 1
+        self._session.flush()
+        return _approval_task_dto(record)
+
+    def record_reminder_outcome(
+        self,
+        *,
+        task_id: int,
+        sent: bool,
+        moment: datetime,
+        error_category: str = "",
+        next_due_at: datetime | None = None,
+    ) -> ApprovalTaskDTO | None:
+        """Persist the outcome of one reminder attempt."""
+
+        record = self._session.get(models.ApprovalTask, task_id)
+        if record is None:
+            return None
+        record.reminder_attempt_count += 1
+        record.reminder_claimed_at = None
+        record.reminder_last_error_category = error_category
+        if sent:
+            record.reminder_sent_count += 1
+            record.reminder_last_sent_at = moment
+            record.reminder_due_at = next_due_at
+        elif next_due_at is not None:
+            record.reminder_due_at = next_due_at
+        self._session.flush()
+        return _approval_task_dto(record)
+
+    def set_reminder_due_at(
+        self, *, task_id: int, due_at: datetime | None
+    ) -> None:
+        record = self._session.get(models.ApprovalTask, task_id)
+        if record is not None:
+            record.reminder_due_at = due_at
+            self._session.flush()
+
     def record_action(
         self,
         *,
@@ -678,6 +772,211 @@ class SqlAlchemyApprovalRepository:
         return record.id
 
 
+class SqlAlchemyEmailRepository:
+    """Persistence for composed emails and their delivery outcomes."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def get_by_idempotency_key(self, key: str) -> EmailRecordDTO | None:
+        record = self._session.scalars(
+            select(models.EmailRecord).where(
+                models.EmailRecord.idempotency_key == key
+            )
+        ).one_or_none()
+        return None if record is None else _email_record_dto(record)
+
+    def get(self, email_record_id: int) -> EmailRecordDTO | None:
+        record = self._session.get(models.EmailRecord, email_record_id)
+        return None if record is None else _email_record_dto(record)
+
+    def create(
+        self,
+        *,
+        quotation_id: str,
+        email_type: str,
+        audience: str,
+        sender: str,
+        recipients: tuple[str, ...],
+        subject: str,
+        body: str = "",
+        body_hash: str = "",
+        body_storage_mode: str = "hash",
+        cc_recipients: tuple[str, ...] = (),
+        bcc_recipients: tuple[str, ...] = (),
+        quotation_version: int = 0,
+        approval_task_id: int | None = None,
+        template_version: str = "v1",
+        agent_provider: str = "deterministic",
+        agent_fallback_used: bool = True,
+        agent_fallback_reason: str = "",
+        delivery_provider: str = "console",
+        status: str = "drafted",
+        idempotency_key: str = "",
+        attachment_document_ids: tuple[int, ...] = (),
+        reminder_cycle: int = 0,
+        created_by_user_id: int | None = None,
+    ) -> EmailRecordDTO:
+        parent = self._session.scalars(
+            select(models.Quotation).where(
+                models.Quotation.quotation_id == quotation_id
+            )
+        ).one_or_none()
+        if parent is None:
+            raise QuotationNotFoundError(f"Unknown quotation: {quotation_id}")
+        record = models.EmailRecord(
+            email_id=f"EMAIL-{uuid4().hex[:16].upper()}",
+            quotation_id=parent.id,
+            quotation_reference=quotation_id,
+            quotation_version=quotation_version or parent.version,
+            approval_task_id=approval_task_id,
+            email_type=email_type,
+            audience=audience,
+            sender=sender,
+            recipients=list(recipients),
+            cc_recipients=list(cc_recipients),
+            bcc_recipients=list(bcc_recipients),
+            subject=subject,
+            body=body,
+            body_hash=body_hash,
+            body_storage_mode=body_storage_mode,
+            template_version=template_version,
+            agent_provider=agent_provider,
+            agent_fallback_used=agent_fallback_used,
+            agent_fallback_reason=agent_fallback_reason,
+            delivery_provider=delivery_provider,
+            status=status,
+            idempotency_key=idempotency_key,
+            attachment_document_ids=list(attachment_document_ids),
+            reminder_cycle=reminder_cycle,
+            created_by_user_id=created_by_user_id,
+        )
+        self._session.add(record)
+        try:
+            self._session.flush()
+        except IntegrityError as error:
+            raise RepositoryError(
+                "An email with this idempotency key already exists."
+            ) from error
+        return _email_record_dto(record)
+
+    def record_attempt(
+        self,
+        *,
+        email_record_id: int,
+        status: str,
+        moment: datetime | None = None,
+        error_category: str = "none",
+        error_detail: str = "",
+        provider_message_id: str = "",
+        increment_attempt: bool = True,
+    ) -> EmailRecordDTO | None:
+        record = self._session.get(models.EmailRecord, email_record_id)
+        if record is None:
+            return None
+        if increment_attempt:
+            record.attempt_count += 1
+        record.status = status
+        record.last_error_category = error_category
+        record.last_error_detail = error_detail
+        if provider_message_id:
+            record.provider_message_id = provider_message_id
+        if status == "sent":
+            record.sent_at = moment or utc_now()
+        self._session.flush()
+        return _email_record_dto(record)
+
+    def list_for_quotation(
+        self, quotation_id: str, *, email_type: str | None = None
+    ) -> tuple[EmailRecordDTO, ...]:
+        statement = (
+            select(models.EmailRecord)
+            .where(models.EmailRecord.quotation_reference == quotation_id)
+            .order_by(models.EmailRecord.id)
+        )
+        if email_type is not None:
+            statement = statement.where(
+                models.EmailRecord.email_type == email_type
+            )
+        return tuple(
+            _email_record_dto(record)
+            for record in self._session.scalars(statement)
+        )
+
+    def list_by_status(
+        self, statuses: tuple[str, ...], *, limit: int = 100
+    ) -> tuple[EmailRecordDTO, ...]:
+        statement = (
+            select(models.EmailRecord)
+            .where(models.EmailRecord.status.in_(statuses))
+            .order_by(models.EmailRecord.id)
+            .limit(limit)
+        )
+        return tuple(
+            _email_record_dto(record)
+            for record in self._session.scalars(statement)
+        )
+
+
+class SqlAlchemyDocumentRepository:
+    """Read and write generated documents used as email attachments."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add(
+        self,
+        *,
+        quotation_id: str,
+        kind: str,
+        audience: str,
+        filename: str,
+        mime_type: str,
+        content: bytes,
+        quotation_version: int = 0,
+        generated_by_user_id: int | None = None,
+    ) -> int:
+        parent = self._session.scalars(
+            select(models.Quotation).where(
+                models.Quotation.quotation_id == quotation_id
+            )
+        ).one_or_none()
+        if parent is None:
+            raise QuotationNotFoundError(f"Unknown quotation: {quotation_id}")
+        record = models.GeneratedDocument(
+            quotation_id=parent.id,
+            quotation_version=quotation_version or parent.version,
+            kind=kind,
+            audience=audience,
+            filename=filename,
+            mime_type=mime_type,
+            content=content,
+            byte_size=len(content),
+            checksum=sha256(content).hexdigest(),
+            generated_by_user_id=generated_by_user_id,
+        )
+        self._session.add(record)
+        self._session.flush()
+        return record.id
+
+    def latest_for_version(
+        self, *, quotation_id: str, quotation_version: int, kind: str
+    ) -> models.GeneratedDocument | None:
+        return self._session.scalars(
+            select(models.GeneratedDocument)
+            .join(models.Quotation)
+            .where(
+                models.Quotation.quotation_id == quotation_id,
+                models.GeneratedDocument.quotation_version == quotation_version,
+                models.GeneratedDocument.kind == kind,
+            )
+            .order_by(models.GeneratedDocument.id.desc())
+        ).first()
+
+    def get(self, document_id: int) -> models.GeneratedDocument | None:
+        return self._session.get(models.GeneratedDocument, document_id)
+
+
 # -- ORM to DTO mapping ------------------------------------------------
 
 
@@ -701,6 +1000,11 @@ def _approval_task_dto(record: models.ApprovalTask) -> ApprovalTaskDTO:
         validation_run_id=record.validation_run_id,
         decision=record.decision,
         reason=record.reason,
+        reminder_cycle=record.reminder_cycle,
+        reminder_sent_count=record.reminder_sent_count,
+        reminder_last_sent_at=record.reminder_last_sent_at,
+        reminder_last_error_category=record.reminder_last_error_category,
+        reminder_attempt_count=record.reminder_attempt_count,
     )
 
 
@@ -796,4 +1100,39 @@ def _quotation_dto(record: models.Quotation) -> QuotationDTO:
             for item in sorted(record.audit_events, key=lambda row: row.id)
         ),
         state_document=dict(record.state_document or {}),
+    )
+
+
+def _email_record_dto(record: models.EmailRecord) -> EmailRecordDTO:
+    return EmailRecordDTO(
+        id=record.id,
+        email_id=record.email_id,
+        quotation_reference=record.quotation_reference,
+        quotation_version=record.quotation_version,
+        email_type=record.email_type,
+        audience=record.audience,
+        sender=record.sender,
+        recipients=tuple(record.recipients or ()),
+        cc_recipients=tuple(record.cc_recipients or ()),
+        bcc_recipients=tuple(record.bcc_recipients or ()),
+        subject=record.subject,
+        body=record.body,
+        body_hash=record.body_hash,
+        body_storage_mode=record.body_storage_mode,
+        template_version=record.template_version,
+        agent_provider=record.agent_provider,
+        agent_fallback_used=record.agent_fallback_used,
+        agent_fallback_reason=record.agent_fallback_reason,
+        delivery_provider=record.delivery_provider,
+        status=record.status,
+        attempt_count=record.attempt_count,
+        approval_task_id=record.approval_task_id,
+        created_at=record.created_at,
+        sent_at=record.sent_at,
+        last_error_category=record.last_error_category,
+        last_error_detail=record.last_error_detail,
+        idempotency_key=record.idempotency_key,
+        provider_message_id=record.provider_message_id,
+        attachment_document_ids=tuple(record.attachment_document_ids or ()),
+        reminder_cycle=record.reminder_cycle,
     )

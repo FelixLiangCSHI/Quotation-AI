@@ -13,6 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 from app.domain.dto import (
     ApprovalTaskDTO,
     AuditEventDTO,
+    EmailRecordDTO,
     LineItemDTO,
     QuotationDTO,
     QuotationSummaryDTO,
@@ -241,3 +242,54 @@ class ApprovalRepository(Protocol):
         triggered_rule_ids: tuple[str, ...] = (),
         occurred_at: datetime | None = None,
     ) -> int: ...
+
+
+@runtime_checkable
+class EmailRepository(Protocol):
+    def create(
+        self,
+        *,
+        quotation_id: str,
+        email_type: str,
+        audience: str,
+        sender: str,
+        recipients: tuple[str, ...],
+        subject: str,
+        body: str = "",
+        body_hash: str = "",
+        body_storage_mode: str = "hash",
+        cc_recipients: tuple[str, ...] = (),
+        bcc_recipients: tuple[str, ...] = (),
+        quotation_version: int = 0,
+        approval_task_id: int | None = None,
+        template_version: str = "v1",
+        agent_provider: str = "deterministic",
+        agent_fallback_used: bool = True,
+        agent_fallback_reason: str = "",
+        delivery_provider: str = "console",
+        status: str = "drafted",
+        idempotency_key: str = "",
+        attachment_document_ids: tuple[int, ...] = (),
+        reminder_cycle: int = 0,
+        created_by_user_id: int | None = None,
+    ) -> EmailRecordDTO: ...
+
+    def get(self, email_record_id: int) -> EmailRecordDTO | None: ...
+
+    def get_by_idempotency_key(self, key: str) -> EmailRecordDTO | None: ...
+
+    def record_attempt(
+        self,
+        *,
+        email_record_id: int,
+        status: str,
+        moment: datetime | None = None,
+        error_category: str = "none",
+        error_detail: str = "",
+        provider_message_id: str = "",
+        increment_attempt: bool = True,
+    ) -> EmailRecordDTO | None: ...
+
+    def list_for_quotation(
+        self, quotation_id: str, *, email_type: str | None = None
+    ) -> tuple[EmailRecordDTO, ...]: ...
