@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.auth.demo_accounts import DEMO_ACCOUNTS
+from app.auth.demo_accounts import DEMO_ACCOUNTS, demo_password
 from app.auth.local_provider import AccountLockedError
 from app.auth.provider import AuthenticationError
 from app.auth.roles import role_label
@@ -31,6 +31,22 @@ def _demo_choices() -> dict[str, str]:
         f"{role_label(role)} — {username}": username
         for username, role, _ in DEMO_ACCOUNTS
     }
+
+
+def _render_demo_credentials() -> None:
+    """List the demo accounts of a synthetic demo deployment.
+
+    Demo accounts hold synthetic data only and share a well-known password, so
+    a reviewer can sign in without any setup. Nothing here is read from a real
+    account.
+    """
+
+    with st.container(border=True):
+        st.markdown("#### Demo credentials")
+        st.caption("Synthetic demo data only. Shared password for every account.")
+        for username, role, _ in DEMO_ACCOUNTS:
+            st.caption(f"`{username}` — {role_label(role)}")
+        st.caption(f"Password: `{demo_password()}`")
 
 
 def _render_demo_role_picker() -> None:
@@ -59,7 +75,10 @@ def _render_demo_role_picker() -> None:
 
 
 def render() -> None:
-    st.title(":material/lock: Sign in")
+    st.title("Quotation AI")
+    st.subheader("Intelligent Quotation Management System")
+    st.caption("Powered by AI-assisted workflow")
+    st.divider()
     st.caption(
         "Internal quotation workspace. Access, roles and every approval "
         "action are granted by an administrator and can never be chosen here."
@@ -85,6 +104,8 @@ def render() -> None:
         if submitted:
             _attempt_sign_in(username, secret)
     with right:
+        if DEMO_MODE:
+            _render_demo_credentials()
         with st.container(border=True):
             st.markdown("#### What you can do after signing in")
             st.caption(

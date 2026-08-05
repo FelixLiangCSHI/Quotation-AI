@@ -20,6 +20,7 @@ from app.runtime import APP_VERSION, bootstrap_from_streamlit
 # imported. Missing secrets are normal and leave the deterministic defaults.
 bootstrap_from_streamlit()
 
+from app.auth.demo_accounts import seed_demo_accounts  # noqa: E402
 from app.auth.roles import role_label  # noqa: E402
 from app.config import DEMO_MODE  # noqa: E402
 from app.services.auth_session import current_user, sign_out  # noqa: E402
@@ -146,9 +147,29 @@ def _render_page(page_key: str, user) -> None:
         )
 
 
+@st.cache_resource(show_spinner=False)
+def _seed_demo_accounts_once() -> bool:
+    """Create the demo accounts of a demo deployment, at most once per process.
+
+    Seeding is idempotent and never changes an existing account, so a real
+    deployment that already manages its users is unaffected.
+    """
+
+    try:
+        seed_demo_accounts()
+    except Exception as error:  # noqa: BLE001 - startup must never fail here
+        LOGGER.warning(
+            "Demo account seeding skipped (%s).", type(error).__name__
+        )
+        return False
+    return True
+
+
 def main() -> None:
     _configure_page()
     ensure_schema()
+    if DEMO_MODE:
+        _seed_demo_accounts_once()
 
     status = evaluate_session(
         st.session_state,

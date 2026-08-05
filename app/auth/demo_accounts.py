@@ -1,12 +1,13 @@
 """Seed one account per role so a demo can be run immediately.
 
-Credentials are never hard-coded. The command line requires the password to be
-supplied through ``QUOTATION_DEMO_PASSWORD`` and never prints it; the provider
-hashes it before it reaches the database.
+These accounts exist for demo and pilot environments with synthetic data only.
+They share the well-known demo password :data:`DEFAULT_DEMO_PASSWORD` so a
+reviewer can sign in without any setup step. A deployment that needs a
+different password sets ``QUOTATION_DEMO_PASSWORD``; the password is always
+hashed before it reaches the database and is never printed by the command line.
 
 Run it with::
 
-    export QUOTATION_DEMO_PASSWORD='...'
     python -m app.auth.demo_accounts
 """
 
@@ -15,17 +16,24 @@ from __future__ import annotations
 import argparse
 import os
 import secrets
-import sys
 from dataclasses import dataclass
 
 from app.auth.local_provider import LocalPasswordAuthenticationProvider
 from app.auth.provider import AuthenticationError
 from app.auth.roles import Role
 
-#: Shared password for every demo account, read from the environment. When it
-#: is absent a separate random password is generated per account; the command
-#: line refuses to run in that case so no password is ever printed.
+#: Shared password for every demo account. ``QUOTATION_DEMO_PASSWORD``
+#: overrides it. Demo accounts hold synthetic data only, which is why a
+#: deliberately simple shared password is acceptable here and nowhere else.
 DEMO_PASSWORD_ENV = "QUOTATION_DEMO_PASSWORD"
+DEFAULT_DEMO_PASSWORD = "123456"
+
+
+def demo_password() -> str:
+    """Return the shared demo password, environment override first."""
+
+    return os.getenv(DEMO_PASSWORD_ENV, "").strip() or DEFAULT_DEMO_PASSWORD
+
 
 #: Username and role of each seeded demo account.
 DEMO_ACCOUNTS: tuple[tuple[str, Role, str], ...] = (
@@ -60,7 +68,7 @@ def seed_demo_accounts(
     """
 
     auth = provider or LocalPasswordAuthenticationProvider()
-    shared = password if password is not None else os.getenv(DEMO_PASSWORD_ENV, "")
+    shared = password if password is not None else demo_password()
     results: list[SeededAccount] = []
     for username, role, display_name in DEMO_ACCOUNTS:
         secret = shared or secrets.token_urlsafe(12)
@@ -70,6 +78,7 @@ def seed_demo_accounts(
                 password=secret,
                 roles=(role,),
                 display_name=display_name,
+                allow_weak_password=True,
             )
         except AuthenticationError:
             results.append(SeededAccount(username=username, role=role, created=False))
@@ -95,21 +104,13 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI entry
     parser = argparse.ArgumentParser(
         prog="python -m app.auth.demo_accounts",
         description=(
-            "Create one demo account per role. The shared password is read "
-            "from QUOTATION_DEMO_PASSWORD and is never printed or stored in "
-            "clear text."
+            "Create one demo account per role. The shared password defaults "
+            "to the documented demo password and can be overridden with "
+            "QUOTATION_DEMO_PASSWORD. It is never printed or stored in clear "
+            "text."
         ),
     )
     parser.parse_args(argv)
-
-    if not os.getenv(DEMO_PASSWORD_ENV, "").strip():
-        print(
-            "Set QUOTATION_DEMO_PASSWORD to the password the demo accounts "
-            "should share, then run this command again. The value is never "
-            "printed or stored in clear text.",
-            file=sys.stderr,
-        )
-        return 2
 
     _ensure_schema()
     accounts = seed_demo_accounts()
@@ -118,8 +119,9 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI entry
         state = "created" if account.created else "already exists (unchanged)"
         print(f"  {account.username:22} {account.role.value:16} {state}")
     print(
-        "\nSign in with the username above and the value of "
-        "QUOTATION_DEMO_PASSWORD."
+        "\nSign in with the username above and the shared demo password "
+        "(QUOTATION_DEMO_PASSWORD when set, otherwise the documented "
+        "default)."
     )
     return 0
 

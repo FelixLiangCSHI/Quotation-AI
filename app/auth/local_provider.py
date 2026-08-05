@@ -101,11 +101,14 @@ class LocalPasswordAuthenticationProvider:
         roles: tuple[Role | str, ...],
         display_name: str = "",
         email: str = "",
+        allow_weak_password: bool = False,
     ) -> AuthenticatedUser:
         """Create a local account with an explicitly assigned role set.
 
         ``roles`` must resolve to known :class:`Role` members, so a user can
         never be given a privileged role through free text.
+        ``allow_weak_password`` waives the minimum-length policy and is only
+        used to seed the demo accounts of a synthetic demo deployment.
         """
 
         resolved = parse_roles(roles)
@@ -125,7 +128,9 @@ class LocalPasswordAuthenticationProvider:
                 display_name=display_name or username.strip(),
                 email=email,
                 roles=tuple(role.value for role in resolved),
-                password_hash=hash_password(password),
+                password_hash=hash_password(
+                    password, allow_weak=allow_weak_password
+                ),
                 auth_provider=self.provider_name,
             )
             uow.commit()

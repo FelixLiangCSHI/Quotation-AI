@@ -23,15 +23,27 @@ class WeakPasswordError(ValueError):
 
 
 def hash_password(
-    password: str, *, iterations: int = DEFAULT_ITERATIONS
+    password: str,
+    *,
+    iterations: int = DEFAULT_ITERATIONS,
+    allow_weak: bool = False,
 ) -> str:
-    """Return an encoded hash of ``password``."""
+    """Return an encoded hash of ``password``.
 
-    if password is None or len(password) < MINIMUM_PASSWORD_LENGTH:
+    ``allow_weak`` skips the minimum-length policy. It exists only for the
+    seeded demo accounts of a synthetic demo deployment and must never be used
+    for a real account.
+    """
+
+    if password is None or (
+        not allow_weak and len(password) < MINIMUM_PASSWORD_LENGTH
+    ):
         raise WeakPasswordError(
             "The password must be at least "
             f"{MINIMUM_PASSWORD_LENGTH} characters long."
         )
+    if not password:
+        raise WeakPasswordError("A password is required.")
     salt = os.urandom(SALT_BYTES)
     derived = hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, iterations

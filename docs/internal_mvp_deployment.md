@@ -96,15 +96,16 @@ For a demo or a walkthrough, one account per role can be seeded in a single
 step instead of creating each account by hand:
 
 ```bash
-export QUOTATION_DEMO_PASSWORD='choose-a-demo-password'
 python -m app.auth.demo_accounts
 ```
 
 This creates `demo.admin`, `demo.sales`, `demo.salesmanager` and
-`demo.pricingmanager`, all sharing the password in `QUOTATION_DEMO_PASSWORD`.
-The command refuses to run when that variable is unset, and it never prints or
-stores the password in clear text. Re-running is safe: an existing account is
-left untouched, including its password. These accounts are for demo and pilot
+`demo.pricingmanager`, all sharing the demo password `123456`. Set
+`QUOTATION_DEMO_PASSWORD` before running the command to use a different shared
+password. The command never prints or stores the password in clear text. When
+`DEMO_MODE` is on, the Streamlit application seeds the same accounts
+automatically at startup and shows the credentials on the login page.
+Re-running is safe: an existing account is left untouched, including its password. These accounts are for demo and pilot
 environments only; do not seed them into a production deployment.
 
 ## Health checks

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from app.auth.demo_accounts import DEMO_ACCOUNTS, seed_demo_accounts
+from app.auth.demo_accounts import (
+    DEFAULT_DEMO_PASSWORD,
+    DEMO_ACCOUNTS,
+    seed_demo_accounts,
+)
 from app.auth.roles import Role
 
 
@@ -39,3 +43,22 @@ def test_seeding_twice_does_not_change_existing_accounts(auth_provider):
     assert all(not account.created for account in again)
     assert all(account.password is None for account in again)
     auth_provider.authenticate("demo.admin", "demo-secret-123")
+
+
+def test_default_password_is_the_documented_demo_password(
+    auth_provider, monkeypatch
+):
+    monkeypatch.delenv("QUOTATION_DEMO_PASSWORD", raising=False)
+
+    seed_demo_accounts(auth_provider)
+
+    for username, _, _ in DEMO_ACCOUNTS:
+        auth_provider.authenticate(username, DEFAULT_DEMO_PASSWORD)
+
+
+def test_environment_overrides_the_default_password(auth_provider, monkeypatch):
+    monkeypatch.setenv("QUOTATION_DEMO_PASSWORD", "another-demo-secret")
+
+    seed_demo_accounts(auth_provider)
+
+    auth_provider.authenticate("demo.sales", "another-demo-secret")
