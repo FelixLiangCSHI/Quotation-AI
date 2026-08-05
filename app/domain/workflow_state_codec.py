@@ -17,9 +17,11 @@ from datetime import date, datetime
 from typing import Any, get_args, get_origin
 
 from app.quotation_models import (
+    AgentExplanation,
     ApprovalRecord,
     ApprovalStatus,
     AuditEvent,
+    BundlePricingAnalysis,
     CombinedDecision,
     CommercialRuleResult,
     CommercialValidationResult,
@@ -28,14 +30,17 @@ from app.quotation_models import (
     LineItemCategory,
     QuotationLineItem,
     PricingResult,
+    LinePricingAnalysis,
     QuotationDraft,
+    QuotationPricingAnalysis,
     QuotationWorkflowState,
+    RuleTraceEntry,
     TechnicalValidationResult,
     WorkflowStage,
 )
 
 #: Bumped whenever the persisted shape changes incompatibly.
-STATE_SCHEMA_VERSION = 1
+STATE_SCHEMA_VERSION = 2
 
 
 class WorkflowStateCodecError(ValueError):
@@ -66,6 +71,12 @@ def load_workflow_state(document: dict[str, Any]) -> QuotationWorkflowState:
     state = QuotationWorkflowState(draft=_build(QuotationDraft, draft_payload))
 
     state.pricing_result = _optional(PricingResult, payload.get("pricing_result"))
+    state.quotation_pricing = _optional(
+        QuotationPricingAnalysis, payload.get("quotation_pricing")
+    )
+    state.pricing_explanation = _optional(
+        AgentExplanation, payload.get("pricing_explanation")
+    )
     state.technical_validation = _optional(
         TechnicalValidationResult, payload.get("technical_validation")
     )
@@ -137,6 +148,9 @@ _NESTED_TYPES: dict[str, type] = {
     "ComparableQuotation": ComparableQuotation,
     "CommercialRuleResult": CommercialRuleResult,
     "QuotationLineItem": QuotationLineItem,
+    "LinePricingAnalysis": LinePricingAnalysis,
+    "BundlePricingAnalysis": BundlePricingAnalysis,
+    "RuleTraceEntry": RuleTraceEntry,
 }
 
 _ENUM_TYPES: dict[str, type] = {

@@ -62,6 +62,24 @@ class QuotationLineItem:
     is_optional: bool = False
     source: str = "manual"
     notes: str = ""
+    currency: str = ""
+    list_price: float | None = None
+    recommended_unit_price: float | None = None
+    approved_unit_price: float | None = None
+    comparable_median_price: float | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    comparable_count: int = field(default=0, metadata={"customer_visible": False})
+    estimated_unit_cost: float | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    cost_source: str = field(default="", metadata={"customer_visible": False})
+    pricing_confidence: str = field(
+        default="", metadata={"customer_visible": False}
+    )
+    pricing_data_version: str = field(
+        default="", metadata={"customer_visible": False}
+    )
 
     def __post_init__(self) -> None:
         self.category = LineItemCategory(self.category)
@@ -73,6 +91,14 @@ class QuotationLineItem:
         if self.unit_price is None:
             return None
         return self.unit_price * self.quantity
+
+    @property
+    def proposed_unit_price(self) -> float | None:
+        """The price actually used for this line, if one is known."""
+
+        if self.unit_price is not None:
+            return self.unit_price
+        return self.recommended_unit_price
 
 
 class ApprovalStatus(str, Enum):
@@ -184,6 +210,117 @@ class PricingResult:
 
 
 @dataclass
+class LinePricingAnalysis:
+    """Deterministic pricing analysis of one quotation line item."""
+
+    line_id: str
+    product_id: str = ""
+    description: str = ""
+    line_item_type: str = ""
+    quantity: int = 1
+    is_optional: bool = False
+    currency: str = ""
+    list_price: str | None = None
+    comparable_median_price: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    comparable_count: int = field(default=0, metadata={"customer_visible": False})
+    recommended_unit_price: str | None = None
+    proposed_unit_price: str | None = None
+    approved_unit_price: str | None = None
+    estimated_unit_cost: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    total_cost: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    line_revenue: str | None = None
+    gross_margin_amount: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    gross_margin_percent: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    pricing_confidence: str = field(
+        default="", metadata={"customer_visible": False}
+    )
+    missing_data_flags: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+    pricing_data_version: str = field(
+        default="", metadata={"customer_visible": False}
+    )
+    blocking_reasons: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+
+
+@dataclass
+class BundlePricingAnalysis:
+    """Category / bundle level roll-up of the line analyses."""
+
+    bundle_key: str
+    line_ids: list[str] = field(default_factory=list)
+    line_count: int = 0
+    currency: str = ""
+    total_revenue: str | None = None
+    total_cost: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    gross_margin_amount: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    gross_margin_percent: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    margin_status: str = field(default="", metadata={"customer_visible": False})
+    missing_data_flags: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+
+
+@dataclass
+class QuotationPricingAnalysis:
+    """Quotation-level deterministic pricing analysis.
+
+    Money values are carried as exact decimal strings so that no binary
+    floating-point rounding can reach the margin gate.
+    """
+
+    quotation_id: str = ""
+    pricing_run_id: str = ""
+    quotation_version: str = ""
+    currency: str = ""
+    total_revenue: str | None = None
+    total_cost: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    gross_margin_amount: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    gross_margin_percent: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    margin_status: str = field(
+        default="unavailable", metadata={"customer_visible": False}
+    )
+    line_analyses: list[LinePricingAnalysis] = field(default_factory=list)
+    bundle_analyses: list[BundlePricingAnalysis] = field(default_factory=list)
+    blocking_reasons: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+    missing_data_flags: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+    assumptions: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    pricing_data_version: str = field(
+        default="", metadata={"customer_visible": False}
+    )
+    calculated_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
 class TechnicalValidationResult:
     status: str = "not_checked"
     errors: list[str] = field(default_factory=list)
@@ -267,12 +404,63 @@ class AuditEvent:
 
 
 @dataclass
+class RuleTraceEntry:
+    """One deterministic rule evaluation step, persisted for audit."""
+
+    rule_id: str
+    name: str
+    outcome: str
+    message: str
+    step: int = 0
+    inputs: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class CombinedDecision:
     status: str
     summary: str
     triggered_rule_ids: list[str]
     approval_required: bool
     recommended_next_action: str
+    policy_version_id: str = field(default="", metadata={"customer_visible": False})
+    policy_name: str = field(default="", metadata={"customer_visible": False})
+    evaluated_margin_percent: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    threshold_percent: str | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    comparison_operator: str = field(
+        default="", metadata={"customer_visible": False}
+    )
+    blocking_reasons: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+    review_reasons: list[str] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+    rule_trace: list[RuleTraceEntry] = field(
+        default_factory=list, metadata={"customer_visible": False}
+    )
+    calculated_at: datetime | None = None
+    pricing_run_id: str = field(default="", metadata={"customer_visible": False})
+    technical_validation_run_id: str = field(
+        default="", metadata={"customer_visible": False}
+    )
+    quotation_version: str = ""
+
+
+@dataclass
+class AgentExplanation:
+    """AI-generated explanation. Never part of the commercial decision."""
+
+    label: str = "AI-generated explanation — not part of the commercial decision."
+    summary: str = ""
+    explanation: str = ""
+    risks: list[str] = field(default_factory=list)
+    ai_generated: bool = False
+    fallback_used: bool = True
+    fallback_reason: str = ""
 
 
 @dataclass
@@ -280,6 +468,12 @@ class QuotationWorkflowState:
     draft: QuotationDraft
     product_recommendation: Any | None = None
     pricing_result: PricingResult | None = None
+    quotation_pricing: QuotationPricingAnalysis | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
+    pricing_explanation: AgentExplanation | None = field(
+        default=None, metadata={"customer_visible": False}
+    )
     technical_validation: TechnicalValidationResult | None = None
     commercial_validation: CommercialValidationResult | None = field(
         default=None, metadata={"customer_visible": False}

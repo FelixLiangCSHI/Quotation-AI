@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from app.approval_workflow import prepare_approval
+from app.commercial_policy import (
+    CommercialPolicyVersion,
+    active_commercial_policy,
+)
 from app.commercial_validation import (
     combine_validation_decision,
     validate_commercial,
@@ -9,14 +13,18 @@ from app.conversation_agent import (
     ConversationTurnResult,
     RequirementConversationAgent,
 )
+from app.margin_gate import evaluate_commercial_decision
 from app.pricing_engine import PricingEngine
+from app.pricing_explanation import explain_pricing_decision
 from app.quotation_models import (
     ApprovalStatus,
     CombinedDecision,
     PricingResult,
+    QuotationPricingAnalysis,
     QuotationWorkflowState,
     WorkflowStage,
 )
+from app.quotation_pricing import analyse_quotation_pricing
 from app.recommender import QuoteRecommendation, RecommendationItem
 from app.requirement_intake import confirm_pending
 from app.rule_engine import QuotationRuleEngine
@@ -210,6 +218,90 @@ def validate_workflow(
             "technical_status": technical.status,
             "commercial_status": commercial.status,
             "decision": decision.status,
+        },
+    )
+    return decision
+
+
+def analyse_quotation_lines(
+    state: QuotationWorkflowState,
+    pricing_engine: PricingEngine | None = None,
+    *,
+    policy: CommercialPolicyVersion | None = None,
+    cost_overrides=None,
+    pricing_data_version: str = "",
+) -> QuotationPricingAnalysis:
+    """Run the deterministic multi-line pricing analysis for a quotation."""
+
+    analysis = analyse_quotation_pricing(
+        state.draft,
+        pricing_engine=pricing_engine,
+        policy=policy,
+        cost_overrides=cost_overrides,
+        pricing_data_version=pricing_data_version,
+        quotation_version=state.draft.updated_at.isoformat(),
+    )
+    state.quotation_pricing = analysis
+    state.pricing_explanation = None
+    state.combined_decision = None
+    state.validation_stale = True
+    append_audit_event(
+        state,
+        "quotation_pricing_completed",
+        actor="system",
+        before_state=state.approval.status.value,
+        after_state=state.approval.status.value,
+        changed_fields=["quotation_pricing"],
+        details={
+            "pricing_run_id": analysis.pricing_run_id,
+            "line_count": len(analysis.line_analyses),
+            "margin_status": analysis.margin_status,
+        },
+    )
+    return analysis
+
+
+def judge_quotation(
+    state: QuotationWorkflowState,
+    *,
+    policy: CommercialPolicyVersion | None = None,
+    technical_validation_run_id: str = "",
+    explanation_provider=None,
+) -> CombinedDecision:
+    """Apply the deterministic commercial margin gate and record the trace."""
+
+    if state.quotation_pricing is None:
+        raise WorkflowOrchestrationError(
+            "Run the multi-line pricing analysis before the logical judgement."
+        )
+    decision = evaluate_commercial_decision(
+        state.quotation_pricing,
+        state.technical_validation,
+        policy=policy or active_commercial_policy(),
+        technical_validation_run_id=technical_validation_run_id,
+    )
+    state.combined_decision = decision
+    state.validation_stale = False
+    state.pricing_explanation = explain_pricing_decision(
+        state.quotation_pricing,
+        decision,
+        provider=explanation_provider,
+    )
+    approval = prepare_approval(state)
+    append_audit_event(
+        state,
+        "commercial_decision_completed",
+        actor="system",
+        before_state=ApprovalStatus.NOT_READY.value,
+        after_state=approval.status.value,
+        changed_fields=["combined_decision"],
+        triggered_rule_ids=decision.triggered_rule_ids,
+        details={
+            "decision": decision.status,
+            "policy_version_id": decision.policy_version_id,
+            "evaluated_margin_percent": decision.evaluated_margin_percent,
+            "threshold_percent": decision.threshold_percent,
+            "pricing_run_id": decision.pricing_run_id,
         },
     )
     return decision
