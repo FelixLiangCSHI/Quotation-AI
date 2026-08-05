@@ -75,3 +75,43 @@ def three_line_items() -> tuple[LineItemDTO, ...]:
             proposed_unit_price=Decimal("7500.25"),
         ),
     )
+
+
+@pytest.fixture()
+def auth_provider(session_factory):
+    from app.auth import LocalPasswordAuthenticationProvider
+
+    return LocalPasswordAuthenticationProvider(session_factory)
+
+
+@pytest.fixture()
+def approval_service(session_factory, service):
+    from app.services.approval_service import ApprovalService
+
+    return ApprovalService(session_factory, service)
+
+
+@pytest.fixture()
+def audit_service(session_factory):
+    from app.services.audit_view import AuditViewService
+
+    return AuditViewService(session_factory)
+
+
+@pytest.fixture()
+def people(auth_provider):
+    """One authenticated principal per role."""
+
+    from app.auth import Role
+    from tests.fixtures.phase6_helpers import create_user
+
+    return {
+        "sales": create_user(auth_provider, "sam.sales", Role.SALES_USER),
+        "manager": create_user(
+            auth_provider, "mia.manager", Role.SALES_MANAGER
+        ),
+        "pricing": create_user(
+            auth_provider, "pat.pricing", Role.PRICING_MANAGER
+        ),
+        "admin": create_user(auth_provider, "avi.admin", Role.ADMINISTRATOR),
+    }

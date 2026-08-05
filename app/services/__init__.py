@@ -14,6 +14,7 @@ from app.services.approval_service import (
     StaleApprovalTaskError,
     allowed_actions_for,
 )
+from app.services.audit_view import AuditViewService, redact_details
 from app.services.quotation_service import (
     LoadedQuotation,
     QuotationService,
@@ -41,9 +42,11 @@ __all__ = [
     "ApprovalServiceError",
     "ApprovalTaskCompletedError",
     "ApprovalTaskView",
+    "AuditViewService",
     "MissingJustificationError",
     "StaleApprovalTaskError",
     "allowed_actions_for",
+    "redact_details",
     "ACTIVE_QUOTATION_VERSION_KEY",
     "ACTIVE_USER_KEY",
     "SESSION_REFERENCE_KEYS",

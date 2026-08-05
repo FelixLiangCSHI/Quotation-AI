@@ -132,6 +132,18 @@ class LocalPasswordAuthenticationProvider:
                 expires_at=expires_at,
             )
             uow.users.record_login(user_id=record.id, moment=now)
+            # The session token is a credential and is deliberately absent
+            # from the audit record.
+            uow.audit_events.append(
+                quotation_id="",
+                event_type="user_login",
+                actor=record.username,
+                actor_role=roles[0].value if roles else "",
+                actor_user_id=record.id,
+                after_state="authenticated",
+                occurred_at=now,
+                details={"auth_provider": self.provider_name},
+            )
             principal = AuthenticatedUser(
                 user_id=record.id,
                 username=record.username,

@@ -264,6 +264,14 @@ class ApprovalService:
                     "An approval task is already open for this quotation."
                 )
 
+            # Persist the state change first so the task records the version
+            # the approver will actually be reviewing.
+            updated = uow.quotations.update(
+                quotation_id=loaded.quotation_id,
+                expected_version=loaded.version,
+                state_document=dump_workflow_state(state),
+                fields={"approval_status": approval.status.value},
+            )
             task_id = uow.approvals.open_task(
                 quotation_id=loaded.quotation_id,
                 assigned_approver_name=approver.display_name
@@ -272,19 +280,13 @@ class ApprovalService:
                 assigned_user_id=approver.id,
                 due_at=reminder_due_at,
                 reminder_due_at=reminder_due_at,
-                quotation_version=loaded.version,
+                quotation_version=updated.version,
                 decision_status=decision.status,
                 submitted_by_user_id=user.user_id,
                 submitted_at=utc_now(),
                 policy_version_id=decision.policy_version_id,
                 pricing_run_id=decision.pricing_run_id,
                 validation_run_id=decision.technical_validation_run_id,
-            )
-            uow.quotations.update(
-                quotation_id=loaded.quotation_id,
-                expected_version=loaded.version,
-                state_document=dump_workflow_state(state),
-                fields={"approval_status": approval.status.value},
             )
             uow.audit_events.append(
                 quotation_id=loaded.quotation_id,
@@ -293,7 +295,7 @@ class ApprovalService:
                 actor_role=user.primary_role.value,
                 actor_user_id=user.user_id,
                 after_state=approval.status.value,
-                quotation_version=loaded.version,
+                quotation_version=updated.version,
                 policy_version_id=decision.policy_version_id,
                 request_id=action_request_id,
                 details={
@@ -308,7 +310,7 @@ class ApprovalService:
                 actor=user.username,
                 actor_role=user.primary_role.value,
                 actor_user_id=user.user_id,
-                quotation_version=loaded.version,
+                quotation_version=updated.version,
                 policy_version_id=decision.policy_version_id,
                 request_id=action_request_id,
                 details={
@@ -749,3 +751,48 @@ class ApprovalService:
 
 def approval_status_is_complete(status: str) -> bool:
     return status in COMPLETION_STATES
+
+
+class MaterialEditError(ApprovalServiceError):
+    """Raised when a material edit cannot be applied."""
+
+
+def apply_material_edit(
+    quotation_id: str,
+    *,
+    user: AuthenticatedUser,
+    edits: dict[str, Any],
+    approval_service: "ApprovalService",
+    quotation_service: QuotationService | None = None,
+) -> LoadedQuotation:
+    """Apply a controlled quotation edit after submission.
+
+    A material edit increments the quotation version, cancels any open
+    approval task as ``cancelled_stale``, drops the approval, invalidates the
+    generated customer outputs, and forces pricing and validation to rerun
+    before the quotation may be resubmitted.
+    """
+
+    from app.workflow_validation import apply_quotation_edits
+
+    user.require(Permission.EDIT_OWN_DRAFT)
+    service = quotation_service or QuotationService()
+    loaded = service.load_quotation(quotation_id)
+    changed = apply_quotation_edits(loaded.state, **edits)
+    if not changed:
+        return loaded
+
+    saved = service.save_state(
+        loaded,
+        event_type="quotation_material_edit",
+        actor=user.username,
+        actor_user_id=user.user_id,
+        changed_fields=changed,
+    )
+    approval_service.cancel_open_tasks_for_material_edit(
+        quotation_id,
+        user=user,
+        reason="Material quotation edit after submission.",
+        quotation_version=saved.version,
+    )
+    return service.load_quotation(quotation_id)
