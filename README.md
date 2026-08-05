@@ -468,7 +468,13 @@ Cloud deployment summary:
 2. Create a Streamlit Community Cloud app.
 3. Select the safe repository and branch.
 4. Set the entry point to `streamlit_app.py`.
-5. Deploy without API keys or secrets.
-6. Verify Scenarios A, B, and C.
+5. Deploy. Streamlit secrets are optional: with none configured the app runs in
+   deterministic demo mode with a demo-safe SQLite database and Agents 1-4 on
+   their deterministic providers. `.streamlit/secrets.toml.example` lists every
+   supported key.
+6. Verify Scenarios A, B, and C, and the PASS / REVIEW_REQUIRED / BLOCKED
+   margin gate scenarios.
+7. Expand **Startup status** in the sidebar to confirm the version, active mode,
+   database mode and agent provider status.
 
 Deployment is a manual remaining step. No hosted URL has been tested.
