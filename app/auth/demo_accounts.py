@@ -96,7 +96,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI entry
         prog="python -m app.auth.demo_accounts",
         description=(
             "Create one demo account per role. The shared password is read "
-            f"from {DEMO_PASSWORD_ENV} and is never printed or stored in "
+            "from QUOTATION_DEMO_PASSWORD and is never printed or stored in "
             "clear text."
         ),
     )
@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI entry
 
     if not os.getenv(DEMO_PASSWORD_ENV, "").strip():
         print(
-            f"Set {DEMO_PASSWORD_ENV} to the password the demo accounts "
+            "Set QUOTATION_DEMO_PASSWORD to the password the demo accounts "
             "should share, then run this command again. The value is never "
             "printed or stored in clear text.",
             file=sys.stderr,
@@ -118,8 +118,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI entry
         state = "created" if account.created else "already exists (unchanged)"
         print(f"  {account.username:22} {account.role.value:16} {state}")
     print(
-        f"\nSign in with the username above and the value of "
-        f"{DEMO_PASSWORD_ENV}."
+        "\nSign in with the username above and the value of "
+        "QUOTATION_DEMO_PASSWORD."
     )
     return 0
 
