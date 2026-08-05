@@ -182,3 +182,9 @@ class LocalPasswordAuthenticationProvider:
         with self._unit_of_work() as uow:
             uow.users.revoke_session(token, moment=utc_now())
             uow.commit()
+
+    def has_any_user(self) -> bool:
+        """Return whether any internal account exists yet."""
+
+        with self._unit_of_work() as uow:
+            return bool(uow.users.list_users(only_active=False))

@@ -6,17 +6,16 @@ from typing import Any
 import streamlit as st
 
 from app.approval_workflow import (
-    ACTION_APPROVE,
-    ACTION_APPROVE_WITH_OVERRIDE,
-    ACTION_REJECT,
-    ACTION_REQUEST_REVISION,
-    APPROVER_ROLES,
-    ApprovalWorkflowError,
     approval_reminder_status,
-    available_approval_actions,
     prepare_approval,
-    submit_approval_action,
 )
+from app.auth.provider import PermissionDeniedError
+from app.services.approval_service import (
+    ApprovalService,
+    ApprovalServiceError,
+)
+from app.services.auth_session import current_user
+from app.services.quotation_service import LoadedQuotation
 from app.audit_export import (
     build_customer_quotation_export,
     build_internal_audit_export,
@@ -1368,9 +1367,10 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
     approval = prepare_approval(state)
     st.divider()
     st.subheader("F. Human review")
-    st.warning(
-        "Demo-only simulated approval. The selected role is not authenticated "
-        "and this action is not a company authorization.",
+    st.info(
+        "Approval is an authenticated internal action. Submit the quotation to "
+        "a stored internal approver, who decides on the Approval inbox page. "
+        "Nothing is ever approved automatically.",
         icon=":material/policy:",
     )
     recommended_price = state.pricing_result.recommended_unit_price
@@ -1404,67 +1404,7 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
             approval_reminder_status(state),
             icon=":material/schedule:",
         )
-        actions = available_approval_actions(state)
-        with st.form(f"approval_{state.draft.quotation_id}"):
-            actor_role = st.selectbox("Approver role", APPROVER_ROLES)
-            actor_name = st.text_input("Approver name (optional)")
-            final_price = st.number_input(
-                "Final unit price",
-                min_value=0.0,
-                value=float(proposed_price or 0.0),
-                step=100.0,
-            )
-            reason = st.text_area(
-                "Reason / override justification",
-                help=(
-                    "Mandatory for override, revision request, and rejection."
-                ),
-            )
-            submitted_action = None
-            action_labels = {
-                ACTION_APPROVE: ("Approve", ":material/check_circle:"),
-                ACTION_APPROVE_WITH_OVERRIDE: (
-                    "Approve with override",
-                    ":material/published_with_changes:",
-                ),
-                ACTION_REQUEST_REVISION: (
-                    "Request revision",
-                    ":material/edit_note:",
-                ),
-                ACTION_REJECT: ("Reject", ":material/cancel:"),
-            }
-            action_columns = st.columns(len(actions) or 1, gap="small")
-            for column, action in zip(action_columns, actions):
-                label, icon = action_labels[action]
-                if column.form_submit_button(
-                    label,
-                    icon=icon,
-                    type="primary" if action == ACTION_APPROVE else "secondary",
-                    use_container_width=True,
-                ):
-                    submitted_action = action
-
-        if submitted_action:
-            try:
-                submit_approval_action(
-                    state,
-                    action=submitted_action,
-                    actor_role=actor_role,
-                    actor_name=actor_name,
-                    reason=reason,
-                    final_unit_price=float(final_price),
-                )
-            except ApprovalWorkflowError as error:
-                st.error(
-                    f"Approval action was not accepted: {error}",
-                    icon=":material/error:",
-                )
-                return
-            _persist_and_rerun(
-                state,
-                event_type=f"approval_{submitted_action}",
-                changed_fields=("approval",),
-            )
+        _render_approval_submission(state)
         return
 
     status_label = approval.status.value.replace("_", " ").upper()
@@ -1485,6 +1425,70 @@ def _render_approval_panel(state: QuotationWorkflowState) -> None:
             st.markdown(f"**Reason**  \n:gray[{approval.reason}]")
         if approval.timestamp:
             st.caption(f"Recorded at {approval.timestamp.isoformat()}")
+
+
+
+def _render_approval_submission(state: QuotationWorkflowState) -> None:
+    """Submit the quotation to a stored internal approver.
+
+    The approver is always chosen from persisted internal users; there is no
+    free-text approver and no approval action on this page.
+    """
+
+    user = current_user(st.session_state)
+    if user is None:
+        st.warning(
+            "Sign in on the Approval inbox page to submit this quotation for "
+            "review.",
+            icon=":material/lock:",
+        )
+        return
+
+    service = ApprovalService()
+    try:
+        approvers = service.list_possible_approvers(user)
+    except PermissionDeniedError as error:
+        st.error(str(error), icon=":material/block:")
+        return
+    if not approvers:
+        st.warning(
+            "No internal approver account exists yet. An administrator must "
+            "create one.",
+            icon=":material/person_off:",
+        )
+        return
+
+    labels = {
+        candidate.id: f"{candidate.display_name or candidate.username} "
+        f"({', '.join(candidate.roles)})"
+        for candidate in approvers
+    }
+    with st.form(f"approval_submission_{state.draft.quotation_id}"):
+        approver_id = st.selectbox(
+            "Assign to internal approver",
+            options=list(labels),
+            format_func=lambda value: labels[value],
+        )
+        submitted = st.form_submit_button(
+            "Submit for approval", icon=":material/send:", type="primary"
+        )
+    if not submitted:
+        return
+
+    loaded = get_active_quotation(st.session_state)
+    loaded = LoadedQuotation(record=loaded.record, state=state)
+    try:
+        service.submit_for_approval(
+            loaded, user=user, approver_user_id=approver_id
+        )
+    except (ApprovalServiceError, PermissionDeniedError) as error:
+        st.error(f"Submission refused: {error}", icon=":material/error:")
+        return
+    st.success(
+        "The quotation was submitted to the selected approver.",
+        icon=":material/task_alt:",
+    )
+    st.rerun()
 
 
 def _render_output_stage(state: QuotationWorkflowState) -> None:

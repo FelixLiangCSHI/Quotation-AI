@@ -37,6 +37,13 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   currencies or a technical incompatibility block the quotation. Agent 2 may
   explain the result but can never change it. See
   `docs/phase5_margin_gate_and_multiline_pricing.md`.
+- Authenticated internal approval (Phase 6): locally managed accounts with
+  hashed passwords and persistent sessions, a closed set of roles (Sales User,
+  Sales Manager, Pricing Manager, Administrator) with centrally defined
+  permissions, persistent approval tasks assigned to a stored internal user,
+  documented overrides, staleness and duplicate-action guards, and a
+  role-restricted audit trail. See
+  `docs/phase6_authenticated_approval_and_audit.md`.
 - Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
 - Main-product recommendation and explicit product selection before analysis.
@@ -328,6 +335,18 @@ Each feedback event records quotation ID, timestamp, event type, actor,
 before/after state, changed fields, reason, and triggered rule IDs. This is a
 session-scoped audit trail only; it does not train a model or alter future
 pricing rules.
+
+Phase 6 makes this workflow authenticated and persistent. Approval actions are
+enforced in `app/services/approval_service.py`, not in Streamlit: allowed
+actions are derived deterministically from the Phase 5 decision, the acting
+user must hold the matching permission, the task must be current, and an
+override requires a written justification that acknowledges the margin is at or
+below the configured policy threshold. A PASS quotation is never approved
+automatically, a blocked quotation can never be approved, and a material edit
+cancels the open task and invalidates the earlier approval. Audit records are
+persisted in the database with actor, actor role, quotation version, policy
+version and triggered rule IDs, and are readable only with the audit
+permission.
 
 The demo provides separate internal-audit and customer-data JSON downloads.
 Both use explicit field whitelists and omit raw workbook rows, workbook paths,
