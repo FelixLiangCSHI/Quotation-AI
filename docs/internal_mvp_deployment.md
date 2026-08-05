@@ -90,6 +90,23 @@ never sent twice.
    database, migrations, pricing data and commercial policy.
 7. Start the reminder worker.
 
+## Demo accounts
+
+For a demo or a walkthrough, one account per role can be seeded in a single
+step instead of creating each account by hand:
+
+```bash
+python -m app.auth.demo_accounts
+```
+
+This creates `demo.admin`, `demo.sales`, `demo.salesmanager` and
+`demo.pricingmanager`. Passwords are taken from `QUOTATION_DEMO_PASSWORD` when
+it is set, otherwise a random password per account is generated and printed
+once — record it, because passwords are hashed and cannot be shown again.
+Re-running is safe: an existing account is left untouched, including its
+password. These accounts are for demo and pilot environments only; do not seed
+them into a production deployment.
+
 ## Health checks
 
 ```bash
