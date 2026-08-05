@@ -37,6 +37,19 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
   currencies or a technical incompatibility block the quotation. Agent 2 may
   explain the result but can never change it. See
   `docs/phase5_margin_gate_and_multiline_pricing.md`.
+- Authenticated internal approval (Phase 6): locally managed accounts with
+  hashed passwords and persistent sessions, a closed set of roles (Sales User,
+  Sales Manager, Pricing Manager, Administrator) with centrally defined
+  permissions, persistent approval tasks assigned to a stored internal user,
+  documented overrides, staleness and duplicate-action guards, and a
+  role-restricted audit trail. See
+  `docs/phase6_authenticated_approval_and_audit.md`.
+- Email composition, delivery and reminders (Phase 7): separated composition,
+  AI wording assistance, recipient resolution, delivery adapters (console,
+  SMTP, Microsoft Graph slot), persistent email records, an approval-gated and
+  human-reviewed customer email, and a database-backed two-day approval
+  reminder worker that survives a web-process restart. See
+  `docs/phase7_email_delivery_and_reminders.md`.
 - Quotation draft save and resume, plus duplicate and clone-as-new-version.
 - Session-isolated quotation drafts with ordered missing-field questions.
 - Main-product recommendation and explicit product selection before analysis.
@@ -62,7 +75,7 @@ The current MVP can parse keyword-based requests, suggest a main model plus comp
 app/                 Core Python application code
 app/agents/          Provider-neutral AI agent slots for Agent 1-4
 app/ingestion/       Offline SAP Excel ingestion pipeline (no live SAP link)
-pages/               Additional Streamlit pages (pricing data import)
+app/ui/             Streamlit presentation layer (login, navigation, pages)
 frontend/            Static web frontend
 rules/               Confirmed, merged, normalized, and review-needed rules
 docs/                Project documentation and meeting/supporting materials
@@ -72,7 +85,7 @@ quotation_snapshot.json  Source snapshot used by the MVP
 requirements.txt     Streamlit runtime dependencies
 requirements-api.txt Optional FastAPI backend dependencies
 runtime.txt          Streamlit Community Cloud Python version
-streamlit_app.py     Streamlit prototype entry point
+streamlit_app.py     Streamlit entry point: login gate and role-based routing
 ```
 
 ## Requirements
@@ -156,7 +169,33 @@ Streamlit secret files are ignored by Git. The current application does not load
 `.env` automatically or require credentials.
 
 `streamlit_app.py` is the only authoritative Streamlit Community Cloud entry
-point.
+point. It is the application shell: it renders the login page, enforces the
+idle-session timeout and routes each signed-in user to the workspaces their
+role permits. No business workflow is reachable before signing in.
+
+## Roles and workspaces
+
+The sidebar is derived from the signed-in user's permissions, so two roles
+never see the same starting page.
+
+| Role | Starting page | Workspaces |
+| --- | --- | --- |
+| Sales user | Quotation creation dashboard | Dashboard, Create Quotation, My Quotations, Documents, Email Centre |
+| Sales manager | Approval center | Dashboard, My Quotations, Approval Center, Approval History, Documents, Email Centre |
+| Pricing manager | Pricing and policy control | The approver workspaces plus Policy Management |
+| Administrator | Administration console | Dashboard, Approval Center/History, Pricing Data, Policy, User Management, System Configuration, Documents, Email Centre, Audit |
+
+Cost, margin, policy thresholds and approval rules are internal information
+and appear only in the internal workspaces. A customer document contains the
+approved quotation only.
+
+Sessions end automatically after 30 minutes of inactivity. Set
+`UI_IDLE_TIMEOUT_MINUTES` to change the window. Sign out is always available in
+the sidebar.
+
+For a demo, seed one account per role with
+`python -m app.auth.demo_accounts` and use the **Demo role** dropdown on the
+login page to pre-fill each username.
 
 ## Integrated Demo Workflow
 
@@ -329,20 +368,37 @@ before/after state, changed fields, reason, and triggered rule IDs. This is a
 session-scoped audit trail only; it does not train a model or alter future
 pricing rules.
 
+Phase 6 makes this workflow authenticated and persistent. Approval actions are
+enforced in `app/services/approval_service.py`, not in Streamlit: allowed
+actions are derived deterministically from the Phase 5 decision, the acting
+user must hold the matching permission, the task must be current, and an
+override requires a written justification that acknowledges the margin is at or
+below the configured policy threshold. A PASS quotation is never approved
+automatically, a blocked quotation can never be approved, and a material edit
+cancels the open task and invalidates the earlier approval. Audit records are
+persisted in the database with actor, actor role, quotation version, policy
+version and triggered rule IDs, and are readable only with the audit
+permission.
+
 The demo provides separate internal-audit and customer-data JSON downloads.
 Both use explicit field whitelists and omit raw workbook rows, workbook paths,
 sheet/cell provenance, and secrets. Customer data additionally excludes
 internal cost, margin, commercial-rule, approver, reason, and override details.
 
-Pending reviews show a simulated reminder timestamp two days after quotation
-creation. No worker, scheduler, or email is created; reminder email generation
-is a preview only.
+Pending approval tasks persist a reminder due time two days after submission
+(`APPROVAL_REMINDER_DELAY_HOURS`). A separate worker process,
+`python -m worker.reminder_worker --run-once`, claims due tasks, rechecks their
+status, and sends at most one reminder per configured cycle. The scheduler is
+never inside Streamlit, so restarting the web process cannot lose a reminder.
 
 ## Deterministic Emails and Quotation PDF
 
-Phase 6 adds deterministic templates for internal approval requests, simulated
+Phase 6 added deterministic templates for internal approval requests,
 two-day reminders, customer quotation emails, and rejection/revision
-notifications. No email is sent. Customer email generation is allowed only for
+notifications. Phase 7 delivers them through a pluggable
+`EmailDeliveryProvider` (console by default, SMTP, and a configuration-gated
+Microsoft Graph adapter), persists an `EmailRecord` for every attempt, and
+requires an explicit human draft review before any customer email is sent. Customer email generation is allowed only for
 `approved` and `approved_with_override` quotations and excludes internal costs,
 margins, pricing policies, authority thresholds, rule IDs, provenance, and
 internal comments.
@@ -438,7 +494,13 @@ Cloud deployment summary:
 2. Create a Streamlit Community Cloud app.
 3. Select the safe repository and branch.
 4. Set the entry point to `streamlit_app.py`.
-5. Deploy without API keys or secrets.
-6. Verify Scenarios A, B, and C.
+5. Deploy. Streamlit secrets are optional: with none configured the app runs in
+   deterministic demo mode with a demo-safe SQLite database and Agents 1-4 on
+   their deterministic providers. `.streamlit/secrets.toml.example` lists every
+   supported key.
+6. Verify Scenarios A, B, and C, and the PASS / REVIEW_REQUIRED / BLOCKED
+   margin gate scenarios.
+7. Expand **Startup status** in the sidebar to confirm the version, active mode,
+   database mode and agent provider status.
 
 Deployment is a manual remaining step. No hosted URL has been tested.

@@ -10,3 +10,23 @@ backgroundColor = "#F8FAFC"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#1E293B"
 font = "sans serif"
+
+# Streamlit Community Cloud demo runtime settings (Phase 9).
+[server]
+# The demo has no upload-heavy workflow on Cloud; the ingestion page caps
+# uploads separately. Keeping this modest protects the shared container.
+maxUploadSize = 50
+enableXsrfProtection = true
+enableCORS = true
+
+[browser]
+# No usage statistics are sent from the demo deployment.
+gatherUsageStats = false
+
+[client]
+# Tracebacks stay in the server log; the app shows a friendly message instead.
+showErrorDetails = "none"
+toolbarMode = "minimal"
+
+[runner]
+magicEnabled = false

@@ -1,0 +1,158 @@
+{#-
+  Approved branded customer quotation template (template version v1).
+
+  Every trusted value is supplied by app.documents.context. Plan text is
+  already sanitised by app.documents.plan; autoescaping is enabled as a second
+  layer of defence. The template loads no external resource: there is no
+  <script>, no remote stylesheet, no remote font and no remote image.
+-#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Quotation {{ context.quotation_id }}</title>
+<style>
+  @page {
+    size: A4;
+    margin: 16mm 18mm 20mm 18mm;
+    @bottom-center {
+      content: "Page " counter(page) " of " counter(pages);
+      font-size: 8pt;
+      color: #5A6478;
+    }
+  }
+  body {
+    font-family: {{ font_family }}, "Helvetica", "Arial", sans-serif;
+    font-size: {{ 9 if plan.layout == 'compact' else 10 }}pt;
+    color: #18212F;
+    margin: 0;
+  }
+  .cover { text-align: center; padding-bottom: 12mm; border-bottom: 2px solid #18212F; }
+  .logo { max-height: 18mm; max-width: 60mm; }
+  .logo-placeholder {
+    display: inline-block; padding: 6mm 12mm; border: 1px dashed #A8B2C4;
+    color: #5A6478; font-size: 9pt; letter-spacing: 0.1em;
+  }
+  h1 { font-size: 22pt; margin: 6mm 0 2mm 0; letter-spacing: 0.04em; }
+  h2 { font-size: 11pt; margin: 7mm 0 2mm 0; text-transform: uppercase; letter-spacing: 0.06em; }
+  .subtitle { color: #5A6478; font-size: 11pt; margin: 0; }
+  table { width: 100%; border-collapse: collapse; margin-top: 2mm; }
+  th, td { border: 0.5pt solid #D8DEE8; padding: 2mm 2.5mm; text-align: left; vertical-align: top; }
+  th { background: #18212F; color: #FFFFFF; font-weight: 600; }
+  td.numeric, th.numeric { text-align: right; }
+  .totals td { border: none; padding: 1.2mm 2.5mm; }
+  .totals .grand { font-size: 12pt; font-weight: 700; border-top: 1pt solid #18212F; }
+  .meta td:first-child { width: 42mm; font-weight: 600; background: #F4F6FA; }
+  .narrative { margin: 2mm 0 0 0; white-space: pre-line; }
+  .caption { font-size: 8.5pt; color: #5A6478; margin: 1mm 0 4mm 0; }
+  .terms { font-size: 8.5pt; color: #3A4356; white-space: pre-line; }
+  .footer-meta { margin-top: 6mm; font-size: 8pt; color: #5A6478; }
+  .optional { color: #5A6478; font-style: italic; }
+</style>
+</head>
+<body>
+{% for section_id in plan.section_ids %}
+{% if section_id == 'cover' %}
+  <div class="cover">
+    {% if logo_data_uri %}
+      <img class="logo" src="{{ logo_data_uri }}" alt="Company logo" />
+    {% else %}
+      <div class="logo-placeholder">COMPANY LOGO</div>
+    {% endif %}
+    <h1>{{ plan.heading('cover') or 'Quotation' }}</h1>
+    {% if plan.cover_subtitle %}<p class="subtitle">{{ plan.cover_subtitle }}</p>{% endif %}
+    <table class="meta">
+      <tr><td>Customer</td><td>{{ context.customer_name }}</td></tr>
+      <tr><td>Quotation reference</td><td>{{ context.quotation_id }}</td></tr>
+      <tr><td>Quotation date</td><td>{{ context.quotation_date.isoformat() }}</td></tr>
+      <tr><td>Valid until</td><td>{{ context.validity_date.isoformat() }}</td></tr>
+      <tr><td>Currency</td><td>{{ context.currency }}</td></tr>
+    </table>
+    {% if plan.executive_summary %}<p class="narrative">{{ plan.executive_summary }}</p>{% endif %}
+  </div>
+
+{% elif section_id == 'customer_details' %}
+  <h2>{{ plan.heading('customer_details') }}</h2>
+  <table class="meta">
+    <tr><td>Customer</td><td>{{ context.customer_name }}</td></tr>
+    <tr><td>Delivery location</td><td>{{ context.delivery_location }}</td></tr>
+    <tr><td>Incoterm</td><td>{{ context.incoterm }}</td></tr>
+    <tr><td>Delivery assumptions</td><td>{{ context.delivery_assumption }}</td></tr>
+  </table>
+  {% if plan.narrative('customer_details') %}
+    <p class="narrative">{{ plan.narrative('customer_details') }}</p>
+  {% endif %}
+
+{% elif section_id == 'line_items' %}
+  <h2>{{ plan.heading('line_items') }}</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Product</th><th>Description</th><th>Category</th>
+        <th class="numeric">Qty</th>
+        <th class="numeric">Unit price</th>
+        <th class="numeric">Subtotal</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in context.line_items %}
+      <tr>
+        <td>{{ item.position }}</td>
+        <td>{{ item.product_id }}</td>
+        <td>{{ item.description }}{% if item.is_optional %} <span class="optional">(optional)</span>{% endif %}</td>
+        <td>{{ item.category_label }}</td>
+        <td class="numeric">{{ item.quantity }}</td>
+        <td class="numeric">{{ money(item.unit_price) }}</td>
+        <td class="numeric">{{ money(item.extended_price) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if plan.narrative('line_items') %}
+    <p class="narrative">{{ plan.narrative('line_items') }}</p>
+  {% endif %}
+
+{% elif section_id == 'commercial_summary' %}
+  <h2>{{ plan.heading('commercial_summary') }}</h2>
+  <table class="totals">
+    <tr><td>Subtotal</td><td class="numeric">{{ context.currency }} {{ money(context.subtotal) }}</td></tr>
+    {% if context.has_optional_items %}
+    <tr><td>Optional items (not included in the total)</td>
+        <td class="numeric">{{ context.currency }} {{ money(context.optional_total) }}</td></tr>
+    {% endif %}
+    <tr><td>Incoterm</td><td class="numeric">{{ context.incoterm }}</td></tr>
+    <tr class="grand"><td>Quotation total</td>
+        <td class="numeric">{{ context.currency }} {{ money(context.total) }}</td></tr>
+  </table>
+  {% if plan.narrative('commercial_summary') %}
+    <p class="narrative">{{ plan.narrative('commercial_summary') }}</p>
+  {% endif %}
+
+{% elif section_id == 'customer_summary' %}
+  {% if plan.customer_summary or plan.narrative('customer_summary') %}
+  <h2>{{ plan.heading('customer_summary') }}</h2>
+  <p class="narrative">{{ plan.customer_summary or plan.narrative('customer_summary') }}</p>
+  {% endif %}
+
+{% elif section_id == 'charts' %}
+  {% if charts %}
+  <h2>{{ plan.heading('charts') }}</h2>
+  {% for chart in charts %}
+    <div>{{ chart.svg }}</div>
+    <p class="caption">{{ chart.caption or chart.title }}</p>
+  {% endfor %}
+  {% endif %}
+
+{% elif section_id == 'terms' %}
+  <h2>{{ plan.heading('terms') }}</h2>
+  <p class="terms">{{ terms_text }}</p>
+  {% if plan.narrative('terms') %}<p class="terms">{{ plan.narrative('terms') }}</p>{% endif %}
+{% endif %}
+{% endfor %}
+
+<div class="footer-meta">
+  Quotation {{ context.quotation_id }} &middot; Document version {{ context.document_version }}
+  &middot; Template {{ template_version }}
+</div>
+</body>
+</html>

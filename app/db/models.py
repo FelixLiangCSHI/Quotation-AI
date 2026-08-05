@@ -32,7 +32,13 @@ PERCENT = Numeric(9, 4)
 
 
 class User(Base, TimestampMixin):
-    """An internal user. Authentication itself arrives in a later phase."""
+    """An internal user account with locally managed credentials.
+
+    ``password_hash`` stores only a PBKDF2 digest; no password or secret is
+    ever persisted in clear text. ``auth_provider`` records which
+    authentication source owns the account so a future enterprise SSO provider
+    can coexist with local accounts.
+    """
 
     __tablename__ = "users"
 
@@ -44,11 +50,54 @@ class User(Base, TimestampMixin):
         JSONDocument, nullable=False, default=list
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    password_hash: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    auth_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="local"
+    )
+    external_subject: Mapped[str] = mapped_column(
+        String(255), nullable=False, default=""
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
 
     owned_quotations: Mapped[list["Quotation"]] = relationship(
         back_populates="owner",
         foreign_keys="Quotation.owner_user_id",
     )
+    sessions: Mapped[list["UserSession"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+
+class UserSession(Base, TimestampMixin):
+    """A persistent authenticated session.
+
+    The token is a high-entropy random value; it is a credential, so it is
+    never written to an audit record.
+    """
+
+    __tablename__ = "user_sessions"
+    __table_args__ = (Index("ix_user_sessions_user_id", "user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(
+        String(128), nullable=False, unique=True, index=True
+    )
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    issued_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+
+    user: Mapped[User] = relationship(back_populates="sessions")
 
 
 class PricingDataVersion(Base, TimestampMixin):
@@ -472,8 +521,20 @@ class ApprovalTask(Base, TimestampMixin):
     __table_args__ = (Index("ix_approval_tasks_status", "status"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True
+    )
     quotation_id: Mapped[int] = mapped_column(
         ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    quotation_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1
+    )
+    decision_status: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
     )
     assigned_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
@@ -484,6 +545,12 @@ class ApprovalTask(Base, TimestampMixin):
     assigned_approver_role: Mapped[str] = mapped_column(
         String(100), nullable=False, default=""
     )
+    submitted_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(50), nullable=False, default="pending_review"
     )
@@ -493,13 +560,48 @@ class ApprovalTask(Base, TimestampMixin):
     reminder_due_at: Mapped[datetime | None] = mapped_column(
         UTCDateTime, nullable=True
     )
+    # Reminder bookkeeping. Persisted so a web-process restart cannot lose
+    # reminder state and a second worker run cannot resend the same cycle.
+    reminder_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    reminder_sent_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    reminder_last_sent_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    reminder_claimed_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    reminder_last_error_category: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    reminder_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime, nullable=True
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=""
+    )
+    pricing_run_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    validation_run_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
 
     quotation: Mapped[Quotation] = relationship(back_populates="approval_tasks")
     actions: Mapped[list["ApprovalAction"]] = relationship(
         back_populates="task",
         cascade="all, delete-orphan",
         order_by="ApprovalAction.id",
+    )
+    overrides: Mapped[list["ApprovalOverrideRecord"]] = relationship(
+        back_populates="task",
+        cascade="all, delete-orphan",
+        order_by="ApprovalOverrideRecord.id",
     )
 
 
@@ -536,9 +638,60 @@ class ApprovalAction(Base, TimestampMixin):
     triggered_rule_ids: Mapped[list[str]] = mapped_column(
         JSONDocument, nullable=False, default=list
     )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
     occurred_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     task: Mapped[ApprovalTask] = relationship(back_populates="actions")
+
+
+class ApprovalOverrideRecord(Base, TimestampMixin):
+    """The documented justification for an approval below policy threshold."""
+
+    __tablename__ = "approval_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approval_task_id: Mapped[int] = mapped_column(
+        ForeignKey("approval_tasks.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    approval_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_actions.id", ondelete="SET NULL"), nullable=True
+    )
+    original_decision: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    evaluated_margin_percent: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    policy_threshold_percent: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=""
+    )
+    approver_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    approver_name: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    approver_role: Mapped[str] = mapped_column(
+        String(100), nullable=False, default=""
+    )
+    justification: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    final_approved_price: Mapped[Any | None] = mapped_column(MONEY, nullable=True)
+    final_margin_percent: Mapped[str] = mapped_column(
+        String(32), nullable=False, default=""
+    )
+    triggered_rule_ids: Mapped[list[str]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
+    occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+
+    task: Mapped[ApprovalTask] = relationship(back_populates="overrides")
 
 
 class AuditEventRecord(Base):
@@ -556,8 +709,20 @@ class AuditEventRecord(Base):
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     actor: Mapped[str] = mapped_column(String(200), nullable=False, default="system")
+    actor_role: Mapped[str] = mapped_column(
+        String(100), nullable=False, default=""
+    )
     actor_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    policy_version_id: Mapped[str] = mapped_column(
+        String(120), nullable=False, default=""
+    )
+    request_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
     )
     before_state: Mapped[str] = mapped_column(String(50), nullable=False, default="")
     after_state: Mapped[str] = mapped_column(String(50), nullable=False, default="")
@@ -577,27 +742,68 @@ class AuditEventRecord(Base):
 
 
 class GeneratedDocument(Base, TimestampMixin):
-    """A generated, downloadable and auditable artefact."""
+    """A generated, downloadable and auditable artefact.
+
+    The Phase 8 metadata columns make every customer document traceable to the
+    exact quotation version, approval action, template, document plan and
+    agent provider that produced it. Historical documents are retained and
+    stay associated with their original quotation version; a material edit
+    marks them superseded rather than deleting them.
+    """
 
     __tablename__ = "generated_documents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    document_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", index=True
+    )
     quotation_id: Mapped[int] = mapped_column(
         ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    quotation_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
     quotation_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1
+    )
+    approval_action_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_actions.id", ondelete="SET NULL"), nullable=True
     )
     # customer_pdf | internal_audit_export | customer_export
     kind: Mapped[str] = mapped_column(String(50), nullable=False)
     audience: Mapped[str] = mapped_column(
         String(20), nullable=False, default="internal"
     )
+    template_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    document_plan_version: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    agent_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    render_engine: Mapped[str] = mapped_column(
+        String(50), nullable=False, default=""
+    )
+    generated_at: Mapped[datetime | None] = mapped_column(
+        UTCDateTime(), nullable=True
+    )
     filename: Mapped[str] = mapped_column(String(300), nullable=False)
     mime_type: Mapped[str] = mapped_column(String(120), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    storage_reference: Mapped[str] = mapped_column(
+        String(300), nullable=False, default=""
+    )
     checksum: Mapped[str] = mapped_column(String(128), nullable=False, default="")
     byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: generated | superseded | failed
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="generated", index=True
+    )
+    error_category: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="none"
+    )
     generated_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -606,30 +812,93 @@ class GeneratedDocument(Base, TimestampMixin):
 
 
 class EmailRecord(Base, TimestampMixin):
-    """A generated email and its delivery outcome.
+    """A composed email, its delivery outcome and its provenance.
 
-    Phase 1 persists the record only. Delivery adapters arrive in a later
-    phase; ``status`` defaults to ``drafted``.
+    The full body is persisted only when ``EMAIL_BODY_STORAGE=full``. The
+    default keeps a body hash plus template metadata so an internal MVP does
+    not accumulate sensitive message content it does not need.
     """
 
     __tablename__ = "email_records"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_email_idempotency_key"),
+        Index("ix_email_records_status", "status"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    email_id: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
     quotation_id: Mapped[int] = mapped_column(
         ForeignKey("quotations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    # internal_approval | customer_quotation | reminder | revision
-    kind: Mapped[str] = mapped_column(String(50), nullable=False)
+    quotation_reference: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    quotation_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    approval_task_id: Mapped[int | None] = mapped_column(
+        ForeignKey("approval_tasks.id", ondelete="SET NULL"), nullable=True
+    )
+    # approval_request | approval_reminder | customer_quotation |
+    # revision_request | rejection_notification
+    email_type: Mapped[str] = mapped_column(String(50), nullable=False)
     audience: Mapped[str] = mapped_column(
         String(20), nullable=False, default="internal"
     )
-    recipient: Mapped[str] = mapped_column(String(320), nullable=False, default="")
+    sender: Mapped[str] = mapped_column(String(320), nullable=False, default="")
+    recipients: Mapped[list[str]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
+    cc_recipients: Mapped[list[str]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
+    bcc_recipients: Mapped[list[str]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
     subject: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    body_storage_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="hash"
+    )
     body: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    provider: Mapped[str] = mapped_column(String(50), nullable=False, default="local")
+    body_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+    template_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="v1"
+    )
+    agent_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="deterministic"
+    )
+    agent_fallback_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    agent_fallback_reason: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=""
+    )
+    delivery_provider: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="console"
+    )
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="drafted")
-    error: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    queued_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    last_error_category: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="none"
+    )
+    last_error_detail: Mapped[str] = mapped_column(
+        Text, nullable=False, default=""
+    )
+    idempotency_key: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    provider_message_id: Mapped[str] = mapped_column(
+        String(200), nullable=False, default=""
+    )
+    attachment_document_ids: Mapped[list[int]] = mapped_column(
+        JSONDocument, nullable=False, default=list
+    )
+    reminder_cycle: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     quotation: Mapped[Quotation] = relationship(back_populates="email_records")

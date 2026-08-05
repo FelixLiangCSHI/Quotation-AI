@@ -209,6 +209,7 @@ class QuotationService:
         changed_fields: tuple[str, ...] = (),
         reason: str = "",
         details: dict[str, Any] | None = None,
+        actor_role: str = "",
     ) -> LoadedQuotation:
         """Persist a mutated workflow state, guarded by its version."""
 
@@ -236,12 +237,18 @@ class QuotationService:
                 quotation_id=loaded.quotation_id,
                 event_type=event_type,
                 actor=actor,
+                actor_role=actor_role,
                 actor_user_id=actor_user_id,
                 before_state=before_status,
                 after_state=state.approval.status.value,
                 changed_fields=changed_fields,
                 reason=reason,
                 details=details or {},
+                policy_version_id=(
+                    state.combined_decision.policy_version_id
+                    if state.combined_decision is not None
+                    else ""
+                ),
             )
             uow.commit()
             record = uow.quotations.get_by_quotation_id(loaded.quotation_id)
@@ -512,6 +519,51 @@ class QuotationService:
 
         assert record is not None
         return LoadedQuotation(record=record, state=loaded.state)
+
+    def record_event(
+        self,
+        quotation_id: str,
+        event_type: str,
+        *,
+        actor: str = "system",
+        actor_role: str = "",
+        actor_user_id: int | None = None,
+        before_state: str = "",
+        after_state: str = "",
+        changed_fields: tuple[str, ...] = (),
+        reason: str = "",
+        triggered_rule_ids: tuple[str, ...] = (),
+        details: dict[str, Any] | None = None,
+        policy_version_id: str = "",
+        quotation_version: int = 0,
+        request_id: str = "",
+    ):
+        """Append a standalone audit event for a material workflow step.
+
+        Used for events that do not themselves change persisted state, such as
+        a pricing run, a technical validation, a margin calculation, the
+        logical judgement, or customer-output generation.
+        """
+
+        with self._unit_of_work() as uow:
+            event = uow.audit_events.append(
+                quotation_id=quotation_id,
+                event_type=event_type,
+                actor=actor,
+                actor_role=actor_role,
+                actor_user_id=actor_user_id,
+                before_state=before_state,
+                after_state=after_state,
+                changed_fields=changed_fields,
+                reason=reason,
+                triggered_rule_ids=triggered_rule_ids,
+                details=details or {},
+                policy_version_id=policy_version_id,
+                quotation_version=quotation_version,
+                request_id=request_id,
+            )
+            uow.commit()
+        return event
 
     # -- approval ------------------------------------------------------
 

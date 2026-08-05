@@ -6,7 +6,12 @@ from typing import Any
 
 from app.models import ValidationResult
 from app.natural_language import QuoteRequest
-from app.quotation_models import QuotationWorkflowState, WorkflowStage
+from app.quotation_models import (
+    LineItemCategory,
+    QuotationLineItem,
+    QuotationWorkflowState,
+    WorkflowStage,
+)
 from app.recommender import QuoteRecommendation, RecommendationItem
 from app.workflow_state import append_audit_event, reset_workflow_state
 
@@ -58,6 +63,126 @@ DEMO_SCENARIOS = (
 SCENARIOS_BY_ID = {
     scenario.scenario_id: scenario for scenario in DEMO_SCENARIOS
 }
+
+
+@dataclass(frozen=True)
+class MarginGateScenario:
+    """A synthetic multi-line quotation with a predictable gate outcome."""
+
+    scenario_id: str
+    name: str
+    description: str
+    customer_name: str
+    expected_status: str
+    #: ``(description, category, quantity, unit_price, unit_cost)`` per line.
+    lines: tuple[tuple[str, str, int, float, float | None], ...]
+
+
+#: Synthetic demonstration quotations for the deterministic margin gate. The
+#: threshold itself lives only in :mod:`app.commercial_policy`; these line
+#: values are chosen so the documented outcome follows from it.
+MARGIN_GATE_SCENARIOS = (
+    MarginGateScenario(
+        scenario_id="margin_pass",
+        name="Scenario 1 — PASS (margin above threshold)",
+        description=(
+            "Synthetic two-line quotation with a complete cost basis and a "
+            "gross margin above the active threshold."
+        ),
+        customer_name="Example Medical Center",
+        expected_status="pass",
+        lines=(
+            ("Synthetic imaging system", "main_product", 1, 90000.0, 54000.0),
+            ("Synthetic installation service", "installation", 1, 10000.0, 6000.0),
+        ),
+    ),
+    MarginGateScenario(
+        scenario_id="margin_review",
+        name="Scenario 2 — REVIEW_REQUIRED (margin at the threshold)",
+        description=(
+            "Synthetic quotation whose gross margin lands exactly on the "
+            "active threshold, so human override approval is required."
+        ),
+        customer_name="Sample Regional Clinic",
+        expected_status="review_required",
+        lines=(
+            ("Synthetic imaging system", "main_product", 1, 80000.0, 52000.0),
+            ("Synthetic installation service", "installation", 1, 20000.0, 13000.0),
+        ),
+    ),
+    MarginGateScenario(
+        scenario_id="margin_blocked",
+        name="Scenario 3 — BLOCKED (no trusted cost basis)",
+        description=(
+            "Synthetic quotation containing a revenue line with no trusted "
+            "cost basis, so no margin can be calculated and approval is "
+            "impossible."
+        ),
+        customer_name="Demo Diagnostic Center",
+        expected_status="blocked",
+        lines=(
+            ("Synthetic imaging system", "main_product", 1, 90000.0, 54000.0),
+            ("Bespoke integration service without a costed bill of materials",
+             "service", 1, 25000.0, None),
+        ),
+    ),
+)
+MARGIN_SCENARIOS_BY_ID = {
+    scenario.scenario_id: scenario for scenario in MARGIN_GATE_SCENARIOS
+}
+
+
+def build_margin_gate_state(scenario_id: str) -> QuotationWorkflowState:
+    """Build a ready-to-judge workflow state for a margin gate scenario."""
+
+    scenario = MARGIN_SCENARIOS_BY_ID.get(scenario_id)
+    if scenario is None:
+        raise ValueError(f"Unknown margin gate scenario: {scenario_id}")
+    state = reset_workflow_state({})
+    draft = state.draft
+    draft.customer_name = scenario.customer_name
+    draft.region = "us"
+    draft.product_query = "Synthetic margin gate demonstration quotation"
+    draft.quantity = 1
+    draft.currency = "USD"
+    draft.incoterm = "DAP"
+    draft.delivery_location = "Example City"
+    draft.missing_fields = []
+    draft.line_items = [
+        QuotationLineItem(
+            line_id=f"LI-DEMO-{index}",
+            product_id="",
+            description=description,
+            category=LineItemCategory(category),
+            quantity=quantity,
+            unit_price=unit_price,
+            currency="USD",
+            source="demo_scenario",
+            estimated_unit_cost=unit_cost,
+            cost_source=(
+                "synthetic_demo_cost_basis" if unit_cost is not None else ""
+            ),
+        )
+        for index, (
+            description,
+            category,
+            quantity,
+            unit_price,
+            unit_cost,
+        ) in enumerate(scenario.lines, start=1)
+    ]
+    draft.status = WorkflowStage.READY_FOR_ANALYSIS
+    state.current_stage = WorkflowStage.READY_FOR_ANALYSIS
+    append_audit_event(
+        state,
+        "field_updated",
+        actor="demo_user",
+        before_state="not_ready",
+        after_state="not_ready",
+        changed_fields=["customer_name", "line_items"],
+        reason=f"Loaded {scenario.name}",
+    )
+    return state
 
 
 def load_demo_scenario(

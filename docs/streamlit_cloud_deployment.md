@@ -1,133 +1,185 @@
-# Streamlit Community Cloud Deployment
+# Streamlit Community Cloud Deployment (Phase 9)
 
-## Readiness
+This document covers the Phase 9 target only: a **stable public demo / internal
+pilot demo** environment. It is not an enterprise handover, and the application
+is **not production ready**.
 
-Classification: **B — Minor manual deployment step remains**.
+## 1. What gets deployed
 
-The synthetic-only package is technically verified. A repository has not been
-created or pushed from this workspace, and no hosted Streamlit URL has been
-tested.
+| Item | Value |
+| --- | --- |
+| Entry point | `streamlit_app.py` |
+| Python version | `runtime.txt` requests `3.11` (major.minor only) |
+| Dependencies | `requirements.txt` |
+| Theme and runtime settings | `.streamlit/config.toml` |
+| Secrets template | `.streamlit/secrets.toml.example` (never real values) |
+| Demo data | `Data/synthetic/**` plus in-code synthetic scenarios |
 
-## Mandatory data-safety boundary
+Every runtime dependency is pure Python or ships manylinux wheels. WeasyPrint
+and Playwright are deliberately **not** required, because both need system
+libraries or a browser download that Streamlit Community Cloud cannot provide;
+the PDF renderer falls back to ReportLab.
 
-Public deployment must use:
+## 2. How to deploy
+
+1. Push this repository (private is preferred) to GitHub.
+2. Sign in to Streamlit Community Cloud and select **Create app**.
+3. Choose the repository and branch.
+4. Set the main file path to `streamlit_app.py`.
+5. Optionally paste secrets into the **Secrets** editor (see section 3).
+6. Deploy, then open the hosted URL and expand **Startup status** in the
+   sidebar to confirm the version, mode, database mode and agent status.
+
+## 3. Streamlit secrets
+
+**Every secret is optional.** With no secrets the app starts in deterministic
+demo mode. Copy the structure from `.streamlit/secrets.toml.example`; keys must
+be defined at the top level, not inside a `[section]`.
+
+Only allow-listed names are promoted to environment variables, and an existing
+environment variable is never overridden.
+
+Demo safety switches:
 
 ```text
-PRICING_DATA_MODE=synthetic
-DEMO_MODE=true
-SHOW_INTERNAL_COSTS=false
-ENABLE_LLM=false
+DEMO_MODE
+SHOW_INTERNAL_COSTS
+ENABLE_LLM
+PRICING_DATA_MODE
 ```
 
-The defaults already match these values. Do not configure
-`PRICING_DATA_MODE=archived_workbook` in Streamlit Community Cloud.
+Storage:
 
-The public repository must not contain:
+```text
+DEMO_DATABASE_MODE
+DATABASE_URL
+DATABASE_ECHO
+```
 
-- archived pricing workbooks,
-- internal catalog snapshots or rule artifacts,
-- decision-tree source files,
-- source/sample PDFs,
-- meeting spreadsheets,
-- generated internal/customer samples,
-- legacy frontend assets,
-- large product images.
+Optional AI agents (`n` is 1-4):
 
-The repository `.gitignore` excludes those categories. `.gitignore` does not
-remove files already tracked in Git history, so verify the actual index and
-history before pushing.
+```text
+AGENTn_PROVIDER
+AGENTn_API_KEY
+AGENTn_API_KEY_ENV
+AGENTn_BASE_URL
+AGENTn_MODEL
+AGENTn_TIMEOUT_SECONDS
+AGENTn_MAX_RETRIES
+AGENTn_ORGANISATION
+AGENTn_PROJECT
+AGENTn_PROMPT_TEMPLATE_VERSION
+```
 
-Prefer a private GitHub repository and restricted deployment if organizational
-policy supports it. A public repository is acceptable only for the verified
-synthetic allowlist.
+Optional email delivery:
 
-## Safe repository preparation
+```text
+EMAIL_DELIVERY_PROVIDER
+EMAIL_SENDER_ADDRESS
+EMAIL_INTERNAL_DOMAINS
+EMAIL_ALLOW_CUSTOMER_DELIVERY
+AUTH_MAX_FAILED_LOGINS
+```
 
-1. Create a new empty GitHub repository. Prefer private visibility.
-2. Initialize Git in a clean copy of this workspace, not in a folder containing
-   unrelated files.
-3. Copy or stage only:
-   - `app/*.py`,
-   - `Data/synthetic/**`,
-   - `streamlit_app.py`,
-   - `.streamlit/config.toml` (theme only; never `secrets.toml`),
-   - `requirements.txt`,
-   - `runtime.txt`,
-   - `.gitignore`,
-   - `.env.example`,
-   - `README.md`,
-   - the three allowlisted deployment/checklist documents.
-4. Run `git status --short` and inspect every staged path.
-5. Run `git ls-files` and confirm no excluded data or asset path appears.
-6. If any proprietary file was ever committed, create a fresh clean repository
-   or remove it from Git history before publication.
-7. Do not use Git LFS for runtime data; the synthetic runtime files are small.
+No value is listed here on purpose. Never paste a production connection string
+or a real API key into a public demo.
 
-## Local verification
+## 4. Optional AI API configuration
 
-From the safe repository root:
+Agents 1-4 are independent and default to `deterministic`:
 
-```powershell
+| Agent | Role | Default |
+| --- | --- | --- |
+| Agent 1 | Requirement understanding | deterministic provider |
+| Agent 2 | Pricing explanation | deterministic provider |
+| Agent 3 | Email drafting | deterministic email template |
+| Agent 4 | Document narrative | deterministic document generation |
+
+Supported providers: `deterministic`, `mock`, `http_json`,
+`openai_compatible`. A missing key, an invalid provider name, an unreachable
+endpoint or a malformed response all fall back to the deterministic result;
+none of them fails the workflow.
+
+No AI output can change a cost, a price, a margin, the 35% threshold or the
+decision. AI text in the UI is explicitly labelled.
+
+## 5. Demo mode explanation
+
+### Database
+
+Streamlit Community Cloud does not guarantee persistent local storage, so the
+demo picks a demo-safe SQLite mode. `DEMO_DATABASE_MODE` controls it:
+
+| Mode | Behaviour |
+| --- | --- |
+| `auto` (default) | Local `./quotation_ai.db` when the working directory is writable, otherwise a temporary file |
+| `temporary_file` | Always a throwaway SQLite file in the OS temp directory |
+| `memory` | In-memory SQLite, discarded on every process restart |
+| `local_file` | Always `./quotation_ai.db` |
+
+Setting `DATABASE_URL` overrides all of this. The active mode and its
+persistence guarantee are always displayed in the sidebar **Startup status**
+panel, and the reported target never contains a credential.
+
+### Demo data
+
+All demo material is anonymised and synthetic: `Data/synthetic/pricing_demo.csv`,
+`Data/synthetic/quotation_snapshot.json`, the in-code product recommendation and
+the margin gate scenarios. There are no real SAP exports, customer names,
+company pricing or confidential documents.
+
+### Demo scenarios
+
+Two families are available in the sidebar.
+
+*Product recommendation scenarios* (Scenario A/B/C) drive the single-product
+pricing path. *Margin gate scenarios* drive the deterministic quotation-level
+gate:
+
+| Scenario | Input | Outcome |
+| --- | --- | --- |
+| Scenario 1 — PASS | Gross margin 40% (above the 35% threshold) | `PASS` → human approval → PDF and email available |
+| Scenario 2 — REVIEW_REQUIRED | Gross margin exactly 35% | `REVIEW_REQUIRED` → override approval with a documented reason |
+| Scenario 3 — BLOCKED | Revenue line with no trusted cost basis | `BLOCKED` → cannot be approved, no customer output |
+
+## 6. Customer-facing output protection
+
+Customer PDF, customer email and the customer JSON export are built from a
+customer-safe context and are covered by automated leakage tests. They exclude
+cost, margin amounts and percentages, the 35% threshold, internal rules, the
+policy version, approval reasons, AI prompts and internal audit information.
+
+## 7. Startup checks
+
+The sidebar **Startup status** panel reports, without exposing any secret:
+
+- application version and phase,
+- active mode (`demo` or `configured API`),
+- pricing data mode,
+- database mode and its persistence guarantee,
+- Agent 1-4 provider, mode, whether an API key is present, and the fallback.
+
+## 8. Local verification
+
+```bash
 python -m pip install -r requirements.txt
-python -m compileall -q app streamlit_app.py
+python -m pytest -q
 streamlit run streamlit_app.py
 ```
 
-The app requires no API key, database, live SAP connection, email server,
-background worker, or localhost API.
+## 9. Known limitations
 
-## Streamlit Community Cloud steps
-
-1. Push the reviewed safe repository to GitHub.
-2. Sign in to Streamlit Community Cloud.
-3. Select **Create app**.
-4. Choose the safe repository and deployment branch.
-5. Set the entry point to:
-
-   ```text
-   streamlit_app.py
-   ```
-
-6. Do not add API keys or proprietary data to Streamlit secrets.
-7. Do not override `PRICING_DATA_MODE`.
-8. Deploy.
-9. Open the hosted URL in a new browser session.
-10. Verify:
-    - Scenario A reaches normal approval and customer outputs.
-    - Scenario B requires an override reason.
-    - Scenario C cannot be approved.
-    - PDF and JSON downloads use the current quotation ID.
-    - a second private/incognito session receives a different quotation ID.
-
-## Authorized private local archived mode
-
-Archived mode is not a Cloud deployment option. For authorized local testing
-only:
-
-```powershell
-$env:PRICING_DATA_MODE = "archived_workbook"
-streamlit run streamlit_app.py
-```
-
-Keep the private source file outside any public repository and follow
-organizational access, retention, and handling policies. Reset the environment
-variable to `synthetic` before public testing.
-
-## Security and privacy limitations
-
-- Approval identity is self-declared and unauthenticated. It is a workflow
-  simulation, not company authorization.
-- Never enter real customer-sensitive information or secrets in a public demo.
-- Internal views contain synthetic values only and are not approved policies.
-- No data persists after the Streamlit session ends.
-- No email is sent.
-- Customer PDF support defaults to English/Western fonts.
-- `runtime.txt` requests Python `3.11`. Streamlit Community Cloud only supports
-  major.minor versions, so an exact patch pin such as `python-3.11.9` makes the
-  build fail.
-
-## Post-deployment record
-
-Record the deployed URL, commit SHA, deployment date, repository visibility,
-and acceptance tester only after the hosted app has been tested. This workspace
-does not claim a successful deployment.
+- Not production ready. No enterprise SSO, no Kubernetes, no Docker production
+  deployment, no company infrastructure and no real business data.
+- Approval identity in the default demo is a workflow simulation.
+- The 35% margin threshold is a **provisional internal-MVP assumption**; the
+  formal company standard has not been supplied.
+- Demo storage is throwaway. Quotations do not survive a container restart in
+  `temporary_file` or `memory` mode.
+- No email is actually delivered by the default `console` provider.
+- Customer PDF output defaults to Western fonts unless licensed font paths are
+  configured on the host.
+- `PRICING_DATA_MODE=archived_workbook` is a local, authorised-use-only mode and
+  must never be configured on Streamlit Community Cloud.
+- Streamlit Community Cloud only accepts major.minor Python versions, so an
+  exact patch pin in `runtime.txt` would break the build.

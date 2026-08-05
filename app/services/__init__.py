@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+from app.services.approval_service import (
+    ALLOWED_ACTIONS_BY_DECISION,
+    COMPLETION_STATES,
+    PERMISSION_BY_ACTION,
+    ApprovalService,
+    ApprovalServiceError,
+    ApprovalTaskCompletedError,
+    ApprovalTaskView,
+    MissingJustificationError,
+    StaleApprovalTaskError,
+    allowed_actions_for,
+)
+from app.services.audit_view import AuditViewService, redact_details
 from app.services.quotation_service import (
     LoadedQuotation,
     QuotationService,
@@ -22,6 +35,18 @@ from app.services.unit_of_work import UnitOfWork
 
 __all__ = [
     "ACTIVE_QUOTATION_KEY",
+    "ALLOWED_ACTIONS_BY_DECISION",
+    "COMPLETION_STATES",
+    "PERMISSION_BY_ACTION",
+    "ApprovalService",
+    "ApprovalServiceError",
+    "ApprovalTaskCompletedError",
+    "ApprovalTaskView",
+    "AuditViewService",
+    "MissingJustificationError",
+    "StaleApprovalTaskError",
+    "allowed_actions_for",
+    "redact_details",
     "ACTIVE_QUOTATION_VERSION_KEY",
     "ACTIVE_USER_KEY",
     "SESSION_REFERENCE_KEYS",

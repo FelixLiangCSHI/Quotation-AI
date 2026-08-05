@@ -233,6 +233,7 @@ class DocumentPlanRequest:
     section_ids: tuple[str, ...]
     section_headings: dict[str, str] = field(default_factory=dict)
     customer_safe_facts: tuple[str, ...] = ()
+    allowed_chart_ids: tuple[str, ...] = ()
 
 
 class Agent4DocumentPlanAgent(BaseAgent):
@@ -246,9 +247,11 @@ class Agent4DocumentPlanAgent(BaseAgent):
     ) -> AgentOutcome[Agent4DocumentPlanResponse]:
         baseline = self.deterministic_baseline(request)
         allowed = set(request.section_ids)
+        allowed_charts = set(request.allowed_chart_ids)
         payload = {
             "section_ids": list(request.section_ids),
             "section_headings": dict(request.section_headings),
+            "allowed_chart_ids": list(request.allowed_chart_ids),
             "deterministic_baseline": baseline.model_dump(),
         }
 
@@ -264,6 +267,13 @@ class Agent4DocumentPlanAgent(BaseAgent):
                 problems.append("Duplicate document sections proposed.")
             if set(proposed) != allowed:
                 problems.append("Document plan must keep every required section.")
+            if allowed_charts:
+                unknown_charts = sorted(
+                    {caption.chart_id for caption in candidate.chart_captions}
+                    - allowed_charts
+                )
+                if unknown_charts:
+                    problems.append("Unknown chart identifiers proposed.")
             return problems
 
         return run_agent_task(

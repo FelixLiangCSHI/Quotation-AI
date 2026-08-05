@@ -68,6 +68,26 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/status")
+def status() -> dict[str, Any]:
+    """Operational status. Contains no credential or connection string."""
+
+    from app.operations.status import status_report
+
+    return status_report()
+
+
+@app.get("/status/{component}")
+def component_status(component: str) -> dict[str, Any]:
+    from app.operations.status import status_report
+
+    report = status_report()
+    entry = report["components"].get(component)
+    if entry is None:
+        raise HTTPException(status_code=404, detail="unknown status component")
+    return entry
+
+
 @app.post("/recommend", response_model=RecommendResponse)
 def recommend(request: RecommendRequest) -> RecommendResponse:
     message = request.message.strip()

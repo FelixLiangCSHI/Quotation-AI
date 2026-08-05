@@ -11,7 +11,9 @@ from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
 from app.domain.dto import (
+    ApprovalTaskDTO,
     AuditEventDTO,
+    EmailRecordDTO,
     LineItemDTO,
     QuotationDTO,
     QuotationSummaryDTO,
@@ -63,11 +65,18 @@ class UserRepository(Protocol):
         display_name: str = "",
         email: str = "",
         roles: tuple[str, ...] = (),
+        password_hash: str = "",
+        auth_provider: str = "local",
+        external_subject: str = "",
     ) -> UserDTO: ...
 
     def get_by_username(self, username: str) -> UserDTO | None: ...
 
     def get(self, user_id: int) -> UserDTO | None: ...
+
+    def list_users(self, *, only_active: bool = True) -> tuple[UserDTO, ...]: ...
+
+    def list_by_role(self, role: str) -> tuple[UserDTO, ...]: ...
 
 
 @runtime_checkable
@@ -142,6 +151,10 @@ class AuditEventRepository(Protocol):
         triggered_rule_ids: tuple[str, ...] = (),
         details: dict[str, Any] | None = None,
         occurred_at: datetime | None = None,
+        actor_role: str = "",
+        quotation_version: int = 0,
+        policy_version_id: str = "",
+        request_id: str = "",
     ) -> AuditEventDTO: ...
 
     def list_for_quotation(
@@ -160,9 +173,37 @@ class ApprovalRepository(Protocol):
         assigned_user_id: int | None = None,
         due_at: datetime | None = None,
         reminder_due_at: datetime | None = None,
+        task_reference: str = "",
+        quotation_version: int = 0,
+        decision_status: str = "",
+        submitted_by_user_id: int | None = None,
+        submitted_at: datetime | None = None,
+        policy_version_id: str = "",
+        pricing_run_id: str = "",
+        validation_run_id: str = "",
     ) -> int: ...
 
     def get_open_task_id(self, quotation_id: str) -> int | None: ...
+
+    def get_open_task(self, quotation_id: str) -> ApprovalTaskDTO | None: ...
+
+    def get_task(self, task_id: int) -> ApprovalTaskDTO | None: ...
+
+    def list_tasks(
+        self,
+        *,
+        assigned_user_id: int | None = None,
+        statuses: tuple[str, ...] = (),
+        quotation_id: str | None = None,
+    ) -> tuple[ApprovalTaskDTO, ...]: ...
+
+    def cancel_open_tasks(
+        self,
+        *,
+        quotation_id: str,
+        reason: str = "",
+        moment: datetime | None = None,
+    ) -> tuple[int, ...]: ...
 
     def record_action(
         self,
@@ -180,4 +221,75 @@ class ApprovalRepository(Protocol):
         final_unit_price: Any | None = None,
         triggered_rule_ids: tuple[str, ...] = (),
         occurred_at: datetime | None = None,
+        quotation_version: int = 0,
     ) -> int: ...
+
+    def record_override(
+        self,
+        *,
+        task_id: int,
+        approval_action_id: int | None,
+        original_decision: str,
+        evaluated_margin_percent: str,
+        policy_threshold_percent: str,
+        policy_version_id: str,
+        approver_name: str,
+        approver_role: str,
+        justification: str,
+        approver_user_id: int | None = None,
+        final_approved_price: Any | None = None,
+        final_margin_percent: str = "",
+        triggered_rule_ids: tuple[str, ...] = (),
+        occurred_at: datetime | None = None,
+    ) -> int: ...
+
+
+@runtime_checkable
+class EmailRepository(Protocol):
+    def create(
+        self,
+        *,
+        quotation_id: str,
+        email_type: str,
+        audience: str,
+        sender: str,
+        recipients: tuple[str, ...],
+        subject: str,
+        body: str = "",
+        body_hash: str = "",
+        body_storage_mode: str = "hash",
+        cc_recipients: tuple[str, ...] = (),
+        bcc_recipients: tuple[str, ...] = (),
+        quotation_version: int = 0,
+        approval_task_id: int | None = None,
+        template_version: str = "v1",
+        agent_provider: str = "deterministic",
+        agent_fallback_used: bool = True,
+        agent_fallback_reason: str = "",
+        delivery_provider: str = "console",
+        status: str = "drafted",
+        idempotency_key: str = "",
+        attachment_document_ids: tuple[int, ...] = (),
+        reminder_cycle: int = 0,
+        created_by_user_id: int | None = None,
+    ) -> EmailRecordDTO: ...
+
+    def get(self, email_record_id: int) -> EmailRecordDTO | None: ...
+
+    def get_by_idempotency_key(self, key: str) -> EmailRecordDTO | None: ...
+
+    def record_attempt(
+        self,
+        *,
+        email_record_id: int,
+        status: str,
+        moment: datetime | None = None,
+        error_category: str = "none",
+        error_detail: str = "",
+        provider_message_id: str = "",
+        increment_attempt: bool = True,
+    ) -> EmailRecordDTO | None: ...
+
+    def list_for_quotation(
+        self, quotation_id: str, *, email_type: str | None = None
+    ) -> tuple[EmailRecordDTO, ...]: ...

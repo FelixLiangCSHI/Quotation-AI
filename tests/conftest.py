@@ -75,3 +75,82 @@ def three_line_items() -> tuple[LineItemDTO, ...]:
             proposed_unit_price=Decimal("7500.25"),
         ),
     )
+
+
+@pytest.fixture()
+def auth_provider(session_factory):
+    from app.auth import LocalPasswordAuthenticationProvider
+
+    return LocalPasswordAuthenticationProvider(session_factory)
+
+
+@pytest.fixture()
+def approval_service(session_factory, service):
+    from app.services.approval_service import ApprovalService
+
+    return ApprovalService(session_factory, service)
+
+
+@pytest.fixture()
+def audit_service(session_factory):
+    from app.services.audit_view import AuditViewService
+
+    return AuditViewService(session_factory)
+
+
+@pytest.fixture()
+def people(auth_provider):
+    """One authenticated principal per role."""
+
+    from app.auth import Role
+    from tests.fixtures.phase6_helpers import create_user
+
+    return {
+        "sales": create_user(auth_provider, "sam.sales", Role.SALES_USER),
+        "manager": create_user(
+            auth_provider, "mia.manager", Role.SALES_MANAGER
+        ),
+        "pricing": create_user(
+            auth_provider, "pat.pricing", Role.PRICING_MANAGER
+        ),
+        "admin": create_user(auth_provider, "avi.admin", Role.ADMINISTRATOR),
+    }
+
+
+@pytest.fixture()
+def email_provider():
+    from app.emailing.providers import ConsoleEmailProvider
+
+    return ConsoleEmailProvider()
+
+
+@pytest.fixture()
+def email_config():
+    from tests.fixtures.phase7_helpers import email_config as build
+
+    return build()
+
+
+@pytest.fixture()
+def email_service(session_factory, email_config, email_provider):
+    from app.emailing.service import EmailService
+
+    return EmailService(
+        session_factory, config=email_config, provider=email_provider
+    )
+
+
+@pytest.fixture()
+def reminder_worker(session_factory, email_service, email_config):
+    from app.emailing.reminders import ApprovalReminderWorker
+
+    return ApprovalReminderWorker(
+        session_factory, email_service=email_service, config=email_config
+    )
+
+
+@pytest.fixture()
+def document_service(session_factory, service):
+    from app.services.document_service import DocumentService
+
+    return DocumentService(session_factory, quotation_service=service)

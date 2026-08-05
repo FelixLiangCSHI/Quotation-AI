@@ -56,6 +56,23 @@ class DocumentSectionPlan(StrictSchema):
     narrative: str = Field(default="", max_length=2000)
 
 
+class ChartCaptionPlan(StrictSchema):
+    chart_id: str = Field(min_length=1, max_length=64)
+    caption: str = Field(default="", max_length=300)
+
+
 class Agent4DocumentPlanResponse(StrictSchema):
+    """Agent 4 may propose presentation only.
+
+    Every field here is narrative or ordering. No trusted commercial value,
+    identifier, status or path can be expressed through this schema.
+    """
+
     sections: list[DocumentSectionPlan] = Field(min_length=1, max_length=20)
     customer_safe_summary: str = Field(default="", max_length=2000)
+    cover_subtitle: str = Field(default="", max_length=200)
+    executive_summary: str = Field(default="", max_length=2000)
+    chart_captions: list[ChartCaptionPlan] = Field(
+        default_factory=list, max_length=10
+    )
+    layout_recommendation: str = Field(default="standard", max_length=64)
