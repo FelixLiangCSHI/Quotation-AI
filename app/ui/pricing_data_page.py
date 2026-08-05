@@ -40,7 +40,6 @@ from app.ingestion.repository import (
 from app.ingestion.schemas import DatasetKind, get_schema
 from app.auth.provider import PermissionDeniedError
 from app.auth.roles import Permission
-from app.services.auth_session import current_user, sign_in, sign_out
 from app.services.pricing_data_admin import PricingDataAdminService
 from app.ingestion.storage import LocalWorkbookStorage
 from app.ingestion.validation import validate_rows
@@ -55,51 +54,19 @@ NOT_MAPPED = "— not mapped —"
 IGNORE_SHEET = "— ignore this sheet —"
 
 
-st.set_page_config(page_title="Pricing data import", layout="wide")
-
-
 @st.cache_resource
 def _repository() -> PricingDataRepository:
     ensure_schema()
     return PricingDataRepository()
 
 
-def _render_sign_in() -> None:
-    st.title(":material/lock: Sign in")
-    st.caption(
-        "Pricing data administration is an authenticated action. Only an "
-        "administrator may publish or activate a pricing data version."
-    )
-    with st.form("pricing_data_sign_in"):
-        username = st.text_input("Username")
-        secret = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", icon=":material/login:")
-    if not submitted:
-        return
-    try:
-        sign_in(st.session_state, username=username, password=secret)
-    except Exception as error:  # noqa: BLE001 - shown to the operator
-        st.error(f"Sign in failed: {error}", icon=":material/error:")
-        return
-    st.rerun()
+def render(user) -> None:
+    """Render pricing data administration for an authenticated user."""
 
-
-def main() -> None:
-    user = current_user(st.session_state)
-    if user is None:
-        _render_sign_in()
-        return
-
-    st.title("Pricing data import")
+    st.title(":material/table_chart: Pricing data management")
     st.caption(
         "Offline SAP Excel export only. The application never connects to SAP."
     )
-    with st.sidebar:
-        st.markdown(f"**{user.display_name or user.username}**")
-        st.caption(user.primary_role.value.replace("_", " "))
-        if st.button("Sign out", icon=":material/logout:"):
-            sign_out(st.session_state)
-            st.rerun()
 
     if not user.has_permission(Permission.MANAGE_DATA_VERSIONS):
         st.error(
@@ -517,5 +484,3 @@ def _render_versions(user) -> None:
             return
         st.rerun()
 
-
-main()

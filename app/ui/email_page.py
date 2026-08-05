@@ -11,14 +11,10 @@ from __future__ import annotations
 
 import streamlit as st
 
-from app.auth.roles import Permission, role_label
+from app.auth.roles import Permission
 from app.emailing.contracts import EmailError, EmailStatus, EmailType
 from app.emailing.service import EmailService
 from app.services.approval_service import ApprovalService
-from app.services.auth_session import current_user, sign_in, sign_out
-from app.services.workflow_session import ensure_schema
-
-st.set_page_config(page_title="Email centre", layout="wide")
 
 STATUS_ICONS = {
     EmailStatus.SENT.value: ":material/mark_email_read:",
@@ -27,32 +23,6 @@ STATUS_ICONS = {
     EmailStatus.DRAFTED.value: ":material/drafts:",
     EmailStatus.QUEUED.value: ":material/schedule_send:",
 }
-
-
-def _render_sign_in() -> None:
-    st.title(":material/lock: Sign in")
-    st.caption("Email delivery is an authenticated internal action.")
-    with st.form("email_sign_in"):
-        username = st.text_input("Username")
-        secret = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", icon=":material/login:")
-    if not submitted:
-        return
-    try:
-        sign_in(st.session_state, username=username, password=secret)
-    except Exception as error:  # noqa: BLE001 - shown to the operator
-        st.error(f"Sign in failed: {error}", icon=":material/error:")
-        return
-    st.rerun()
-
-
-def _render_identity(user) -> None:
-    with st.sidebar:
-        st.markdown(f"**{user.display_name or user.username}**")
-        st.caption("Roles: " + ", ".join(role_label(role) for role in user.roles))
-        if st.button("Sign out", icon=":material/logout:"):
-            sign_out(st.session_state)
-            st.rerun()
 
 
 def _render_configuration(emails: EmailService) -> None:
@@ -146,14 +116,9 @@ def _render_email(emails: EmailService, user, record) -> None:
             )
 
 
-def main() -> None:
-    ensure_schema()
-    user = current_user(st.session_state)
-    if user is None:
-        _render_sign_in()
-        return
+def render(user) -> None:
+    """Render the email centre for an authenticated user."""
 
-    _render_identity(user)
     st.title(":material/outgoing_mail: Email centre")
 
     if not user.has_permission(Permission.VIEW_OWN_QUOTATIONS):
@@ -171,7 +136,11 @@ def main() -> None:
 
     quotation_id = st.text_input("Quotation ID", key="email_centre_quotation")
     if not quotation_id.strip():
-        st.caption("Enter a quotation reference to review its emails.")
+        st.info(
+            "Enter a quotation reference to review its drafted, queued and "
+            "sent emails.",
+            icon=":material/mail:",
+        )
         return
 
     if user.has_permission(Permission.VIEW_APPROVAL_TASKS):
@@ -186,11 +155,12 @@ def main() -> None:
 
     records = emails.list_emails(quotation_id.strip(), user=user)
     if not records:
-        st.info("No email has been generated for this quotation yet.")
+        st.info(
+            "No email has been generated for this quotation yet.",
+            icon=":material/drafts:",
+        )
         return
     for record in records:
         with st.container(border=True):
             _render_email(emails, user, record)
 
-
-main()

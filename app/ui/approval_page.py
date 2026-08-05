@@ -17,16 +17,12 @@ from app.approval_workflow import (
     ApprovalWorkflowError,
 )
 from app.auth.provider import PermissionDeniedError
-from app.auth.roles import Permission, role_label
+from app.auth.roles import Permission
 from app.services.approval_service import (
     ApprovalService,
     ApprovalServiceError,
     ApprovalTaskView,
 )
-from app.services.auth_session import current_user, sign_in, sign_out
-from app.services.workflow_session import ensure_schema
-
-st.set_page_config(page_title="Approval inbox", layout="wide")
 
 ACTION_LABELS = {
     ACTION_APPROVE: ("Approve", ":material/check_circle:"),
@@ -43,37 +39,6 @@ MANDATORY_REASON_ACTIONS = (
     ACTION_REQUEST_REVISION,
     ACTION_REJECT,
 )
-
-
-def _render_sign_in() -> None:
-    st.title(":material/lock: Sign in")
-    st.caption(
-        "Approval is an authenticated internal action. Roles are assigned by "
-        "an administrator and can never be chosen here."
-    )
-    with st.form("approval_sign_in"):
-        username = st.text_input("Username")
-        secret = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", icon=":material/login:")
-    if not submitted:
-        return
-    try:
-        sign_in(st.session_state, username=username, password=secret)
-    except Exception as error:  # noqa: BLE001 - shown to the operator
-        st.error(f"Sign in failed: {error}", icon=":material/error:")
-        return
-    st.rerun()
-
-
-def _render_identity(user) -> None:
-    with st.sidebar:
-        st.markdown(f"**{user.display_name or user.username}**")
-        st.caption(
-            "Roles: " + ", ".join(role_label(role) for role in user.roles)
-        )
-        if st.button("Sign out", icon=":material/logout:"):
-            sign_out(st.session_state)
-            st.rerun()
 
 
 def _render_task(service: ApprovalService, user, view: ApprovalTaskView) -> None:
@@ -187,15 +152,54 @@ def _render_task(service: ApprovalService, user, view: ApprovalTaskView) -> None
     st.rerun()
 
 
-def main() -> None:
-    ensure_schema()
-    user = current_user(st.session_state)
-    if user is None:
-        _render_sign_in()
+def render(user) -> None:
+    """Render the approval inbox for an already authenticated user."""
+
+    st.title(":material/approval: Approval Center")
+
+
+def render_history(user) -> None:
+    """Render the approver's completed decisions."""
+
+    st.title(":material/fact_check: Approval History")
+    if not user.has_permission(Permission.VIEW_APPROVAL_TASKS):
+        st.error(
+            "Your role does not include approval review.",
+            icon=":material/block:",
+        )
         return
 
-    _render_identity(user)
-    st.title(":material/approval: Approval inbox")
+    service = ApprovalService()
+    try:
+        tasks = service.list_tasks(user, only_open=False, assigned_to_me=False)
+    except PermissionDeniedError as error:
+        st.error(str(error), icon=":material/block:")
+        return
+    completed = [task for task in tasks if task.completed_at is not None]
+    if not completed:
+        st.info(
+            "No approval decision has been recorded yet.",
+            icon=":material/history_toggle_off:",
+        )
+        return
+
+    st.dataframe(
+        [
+            {
+                "task": task.task_reference,
+                "quotation": task.quotation_reference,
+                "version": task.quotation_version,
+                "decision": task.decision or task.status,
+                "approver": task.assigned_approver_name,
+                "role": task.assigned_approver_role,
+                "completed": task.completed_at,
+                "reason": task.reason,
+            }
+            for task in completed
+        ],
+        use_container_width=True,
+        hide_index=True,
+    )
 
     if not user.has_permission(Permission.VIEW_APPROVAL_TASKS):
         st.error(
@@ -207,8 +211,18 @@ def main() -> None:
     service = ApprovalService()
     tasks = service.list_tasks(user)
     if not tasks:
-        st.info("There are no pending approval tasks assigned to you.")
+        st.info(
+            "No approval task is waiting for you. Tasks appear here as soon "
+            "as a sales user submits a quotation that needs your decision.",
+            icon=":material/inbox:",
+        )
         return
+
+    st.caption(
+        f"{len(tasks)} task(s) awaiting your decision. Cost, margin and "
+        "threshold shown below are internal information and never reach the "
+        "customer document."
+    )
 
     for task in tasks:
         with st.container(border=True):
@@ -219,5 +233,3 @@ def main() -> None:
                 continue
             _render_task(service, user, view)
 
-
-main()

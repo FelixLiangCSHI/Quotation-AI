@@ -5,28 +5,8 @@ from __future__ import annotations
 import streamlit as st
 
 from app.auth.provider import PermissionDeniedError
-from app.auth.roles import Permission, role_label
+from app.auth.roles import Permission
 from app.services.audit_view import AuditViewService
-from app.services.auth_session import current_user, sign_in, sign_out
-from app.services.workflow_session import ensure_schema
-
-st.set_page_config(page_title="Audit trail", layout="wide")
-
-
-def _render_sign_in() -> None:
-    st.title(":material/lock: Sign in")
-    with st.form("audit_sign_in"):
-        username = st.text_input("Username")
-        secret = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", icon=":material/login:")
-    if not submitted:
-        return
-    try:
-        sign_in(st.session_state, username=username, password=secret)
-    except Exception as error:  # noqa: BLE001 - shown to the operator
-        st.error(f"Sign in failed: {error}", icon=":material/error:")
-        return
-    st.rerun()
 
 
 def _row(event) -> dict[str, object]:
@@ -47,21 +27,8 @@ def _row(event) -> dict[str, object]:
     }
 
 
-def main() -> None:
-    ensure_schema()
-    user = current_user(st.session_state)
-    if user is None:
-        _render_sign_in()
-        return
-
-    with st.sidebar:
-        st.markdown(f"**{user.display_name or user.username}**")
-        st.caption(
-            "Roles: " + ", ".join(role_label(role) for role in user.roles)
-        )
-        if st.button("Sign out", icon=":material/logout:"):
-            sign_out(st.session_state)
-            st.rerun()
+def render(user) -> None:
+    """Render the internal audit trail for an authenticated user."""
 
     st.title(":material/history: Internal audit trail")
     if not user.has_permission(Permission.VIEW_AUDIT_RECORDS):
@@ -86,7 +53,11 @@ def main() -> None:
         return
 
     if not events:
-        st.info("No audit records match this filter.")
+        st.info(
+            "No audit record matches this filter. Records appear as soon as a "
+            "quotation is created, submitted or decided.",
+            icon=":material/search_off:",
+        )
         return
 
     st.caption(
@@ -99,5 +70,3 @@ def main() -> None:
         hide_index=True,
     )
 
-
-main()
