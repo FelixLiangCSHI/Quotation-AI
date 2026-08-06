@@ -92,6 +92,7 @@ requirements.txt     Streamlit runtime dependencies
 requirements-api.txt Optional FastAPI backend dependencies
 runtime.txt          Streamlit Community Cloud Python version
 streamlit_app.py     Streamlit entry point: login gate and role-based routing
+demo_app.py          Single-page AI Quotation Assistant demo (no login)
 ```
 
 ## Requirements
@@ -173,6 +174,29 @@ PRICING_DATA_MODE=synthetic
 Copy `.env.example` only when local overrides are needed. Environment files and
 Streamlit secret files are ignored by Git. The current application does not load
 `.env` automatically or require credentials.
+
+## Run the Single-Page Quotation Demo
+
+```powershell
+python -m pip install -r requirements.txt
+streamlit run demo_app.py
+```
+
+`demo_app.py` is the minimal on-site demo page: Sales chats with the assistant,
+the assistant reuses the existing offline requirement parsing
+(`app/natural_language.py`) and configuration matching (`app/recommender.py`),
+and the page then produces an editable quotation table, the discount rate, the
+approval decision and the Excel/PDF outputs.
+
+* No login, no database, no external AI API and no API key.
+* All state lives in `st.session_state`; all data is synthetic.
+* The only approval rule is the discount rate:
+  `discount_rate <= 35%` is automatically approved, and only a discount
+  strictly greater than 35% requires manager approval.
+* Cost, COGS, margin and profit are not shown and never take part in the
+  decision.
+* To show this page on Streamlit Community Cloud, set the app main file to
+  `demo_app.py`.
 
 `streamlit_app.py` is the only authoritative Streamlit Community Cloud entry
 point. It is the application shell: it renders the login page, enforces the
