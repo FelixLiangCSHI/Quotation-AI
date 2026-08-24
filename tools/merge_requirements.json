@@ -1,0 +1,71 @@
+{
+  "name": "merge_requirements",
+  "type": "HTTP",
+  "method": "POST",
+  "optional": true,
+  "description": "把已校验候选合并进会话草稿：高置信度（≥0.7）静默合并，低置信度挂起并返回确认问题；用户确认后再次调用带 confirmations 落库。多轮澄清场景使用。",
+  "api": {
+    "name": "需求候选合并",
+    "path": "/api/v1/requirements/merge",
+    "method": "POST",
+    "description": "把置信度 ≥0.7 的已校验候选静默合并进会话报价草稿，低置信度候选挂起为待确认项（封装 requirement_intake.merge_candidates）。"
+  },
+  "request": {
+    "location": "body",
+    "contentType": "application/json",
+    "parameters": {
+      "session_id": {"type": "string", "required": true, "description": "会话/草稿 ID，保证多轮对话合并到同一草稿"},
+      "candidates": {
+        "type": "array",
+        "required": true,
+        "description": "已通过字段校验的候选值",
+        "items": {
+          "field_name": {"type": "string", "required": true},
+          "value": {"type": "string", "required": true},
+          "confidence": {"type": "number", "required": true, "minimum": 0, "maximum": 1}
+        }
+      },
+      "confirmations": {
+        "type": "array",
+        "required": false,
+        "description": "用户对挂起项的确认/否决",
+        "items": {
+          "field_name": {"type": "string"},
+          "confirmed": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "response": {
+    "parameters": {
+      "merged": {
+        "type": "array",
+        "description": "本次成功写入草稿的字段（confidence ≥ 0.7 或已确认）",
+        "items": {
+          "field_name": {"type": "string"},
+          "value": {"type": "string"}
+        }
+      },
+      "pending_confirmations": {
+        "type": "array",
+        "description": "挂起待用户确认的低置信度候选",
+        "items": {
+          "field_name": {"type": "string"},
+          "value": {"type": "string"},
+          "confidence": {"type": "number"},
+          "question": {"type": "string", "description": "向用户复述确认的问题文本"}
+        }
+      },
+      "rejected": {
+        "type": "array",
+        "items": {
+          "field_name": {"type": "string"},
+          "raw_value": {"type": "string"},
+          "reason": {"type": "string"}
+        }
+      },
+      "draft_snapshot": {"type": "object", "description": "合并后的草稿字段全量视图"}
+    }
+  },
+  "agent_parameter_guidance": "session_id（必填，取会话变量）、candidates（必填，取 validate_requirement_fields 的 accepted 输出）、confirmations（选填，用户确认后回传）"
+}

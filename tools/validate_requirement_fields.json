@@ -1,0 +1,55 @@
+{
+  "name": "validate_requirement_fields",
+  "type": "HTTP",
+  "method": "POST",
+  "description": "需求要素抽取完成后立即调用，对每个候选值做类型/枚举校验与归一化；只有 accepted 的值才能进入后续合并与配置流程。",
+  "api": {
+    "name": "需求字段校验",
+    "path": "/api/v1/requirements/validate",
+    "method": "POST",
+    "description": "对抽取的候选字段值做类型与枚举校验（货币、Incoterm、数量范围等），拒绝非法值并返回原因（封装 app/requirement_fields.py）。"
+  },
+  "request": {
+    "location": "body",
+    "contentType": "application/json",
+    "parameters": {
+      "candidates": {
+        "type": "array",
+        "required": true,
+        "description": "待校验的候选字段列表",
+        "items": {
+          "field_name": {
+            "type": "string",
+            "required": true,
+            "description": "白名单字段名：product_query/region/quantity/intended_use/delivery_location/currency/incoterm/target_price/budget_notes/constraints/customer_name/requested_accessories/requested_services/selected_product_ids"
+          },
+          "value": {"type": "string", "required": true, "description": "候选值原文，例：RMB、2、Singapore"},
+          "confidence": {"type": "number", "required": false, "minimum": 0, "maximum": 1, "default": 0.5}
+        }
+      }
+    }
+  },
+  "response": {
+    "parameters": {
+      "accepted": {
+        "type": "array",
+        "description": "通过校验并已归一化的字段",
+        "items": {
+          "field_name": {"type": "string"},
+          "value": {"type": "string", "description": "归一化后的值，例：RMB→CNY、Singapore→singapore"},
+          "confidence": {"type": "number"}
+        }
+      },
+      "rejected": {
+        "type": "array",
+        "description": "被拒绝的字段及原因",
+        "items": {
+          "field_name": {"type": "string"},
+          "raw_value": {"type": "string"},
+          "reason": {"type": "string", "description": "拒绝原因，例：quantity must be a whole number / currency must be one of: USD, EUR, CNY, SGD, JPY, GBP, AUD, HKD"}
+        }
+      }
+    }
+  },
+  "agent_parameter_guidance": "candidates（必填，直接传入抽取 skill 产出的 requirements 数组）"
+}

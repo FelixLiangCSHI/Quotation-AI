@@ -1,0 +1,59 @@
+{
+  "name": "recommend_configuration",
+  "type": "HTTP",
+  "method": "POST",
+  "description": "把用户的产品需求关键词发给推荐引擎，获得主机型号 + 兼容选项候选及推荐等级。在需求要素齐备后、逐步配置前调用一次以获取基准推荐。",
+  "api": {
+    "name": "产品配置推荐",
+    "path": "/recommend",
+    "method": "POST",
+    "description": "输入自然语言产品需求，返回主机型号与兼容配件候选及推荐等级（已存在于 app/api.py）。"
+  },
+  "request": {
+    "location": "body",
+    "contentType": "application/json",
+    "parameters": {
+      "message": {
+        "type": "string",
+        "required": true,
+        "minLength": 1,
+        "description": "自然语言产品需求",
+        "example": "需要一台 FMT 数字 X 光机，带无线探测器"
+      },
+      "region": {
+        "type": "string",
+        "required": false,
+        "maxLength": 30,
+        "description": "地区，仅支持：canada/china/eu/italy/us/other（及别名 usa、europe 等），非法值返回 422",
+        "example": "china"
+      },
+      "max_accessories": {
+        "type": "integer",
+        "required": false,
+        "minimum": 1,
+        "maximum": 200,
+        "description": "最多返回的配件数"
+      }
+    }
+  },
+  "response": {
+    "parameters": {
+      "answer": {"type": "string", "description": "人类可读的推荐文本"},
+      "recommendation": {
+        "type": "object",
+        "description": "结构化推荐结果（客户安全视图，不含内部成本）",
+        "properties": {
+          "main_model": {"type": "object", "description": "推荐主机型号及决策树依据"},
+          "accessories": {
+            "type": "array",
+            "items": {
+              "product_id": {"type": "string"},
+              "level": {"type": "string", "description": "required / recommended / optional / incompatible / not evaluated"}
+            }
+          }
+        }
+      }
+    }
+  },
+  "agent_parameter_guidance": "message（必填，拼接用户需求原文与已抽取关键词）、region（选填，注意仅传允许的枚举值，否则 422）、max_accessories（选填）"
+}
