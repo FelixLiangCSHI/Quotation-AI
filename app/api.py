@@ -284,6 +284,19 @@ class RequirementCandidateInput(BaseModel):
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
 
 
+def _rejection_reason(error: RequirementValidationError) -> str:
+    """Return the curated, user-facing message of a validation error.
+
+    ``RequirementValidationError`` is always raised with a constant,
+    documentation-approved message (see app/requirement_fields.py); only the
+    first argument is exposed, never a stack trace or wrapped exception.
+    """
+
+    if error.args and isinstance(error.args[0], str):
+        return error.args[0]
+    return "value failed validation"
+
+
 class RequirementValidateRequest(BaseModel):
     candidates: list[RequirementCandidateInput] = Field(..., min_length=1)
 
@@ -300,7 +313,7 @@ def validate_requirement_fields(request: RequirementValidateRequest) -> dict[str
                 {
                     "field_name": candidate.field_name,
                     "raw_value": candidate.value,
-                    "reason": str(error),
+                    "reason": _rejection_reason(error),
                 }
             )
             continue
@@ -356,7 +369,7 @@ def merge_requirements(request: RequirementMergeRequest) -> dict[str, Any]:
                 {
                     "field_name": confirmation.field_name,
                     "raw_value": None,
-                    "reason": str(error),
+                    "reason": _rejection_reason(error),
                 }
             )
             continue
