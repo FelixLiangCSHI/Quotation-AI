@@ -1,65 +1,134 @@
 {
-  "name": "search_decision_tree",
-  "type": "HTTP",
-  "method": "GET",
-  "description": "在配置任何参数前检索决策树知识库，获取该步骤的候选选项与规则依据。当需要确定主机、探测器、滤线栅、发生器/球管等某一步的可选项时调用。",
-  "api": {
-    "name": "决策树节点检索",
-    "path": "/api/v1/decision-tree/search",
-    "method": "GET",
-    "description": "按产品线或关键词检索知识库决策树节点（products / step_options / rule_signals），返回步骤 ID、选项组与约束原文。"
+  "openapi": "3.0.1",
+  "info": {
+    "title": "search_decision_tree",
+    "description": "在配置任何参数前检索决策树知识库，获取该步骤的候选选项与规则依据。当需要确定主机、探测器、滤线栅、发生器/球管等某一步的可选项时调用。",
+    "version": "1.0.0"
   },
-  "request": {
-    "location": "query",
-    "parameters": {
-      "query": {
-        "type": "string",
-        "required": true,
-        "description": "检索关键词，如产品线、型号或选项名，例：FMT",
-        "example": "FMT"
-      },
-      "product_id": {
-        "type": "string",
-        "required": false,
-        "description": "限定某一产品 ID 内检索，例：DEMO-FMT-100"
-      },
-      "option_group": {
-        "type": "string",
-        "required": false,
-        "description": "限定选项组：System / Detector / Grid / Generator / Tube / Accessories"
-      },
-      "limit": {
-        "type": "integer",
-        "required": false,
-        "default": 10,
-        "description": "最多返回节点数（1-50）"
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Quotation Bot API 服务地址（导入后请替换为实际部署地址）"
+    }
+  ],
+  "paths": {
+    "/api/v1/decision-tree/search": {
+      "get": {
+        "operationId": "search_decision_tree",
+        "summary": "决策树节点检索",
+        "description": "按产品线或关键词检索知识库决策树节点（products / step_options / rule_signals），返回步骤 ID、选项组与约束原文。Agent 参数指引：query（必填，取自用户需求关键词）、product_id、option_group、limit（选填）。",
+        "parameters": [
+          {
+            "name": "query",
+            "in": "query",
+            "required": true,
+            "description": "检索关键词，如产品线、型号或选项名，例：FMT",
+            "schema": {
+              "type": "string",
+              "example": "FMT"
+            }
+          },
+          {
+            "name": "product_id",
+            "in": "query",
+            "required": false,
+            "description": "限定某一产品 ID 内检索，例：DEMO-FMT-100",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "option_group",
+            "in": "query",
+            "required": false,
+            "description": "限定选项组：System / Detector / Grid / Generator / Tube / Accessories",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "最多返回节点数（1-50）",
+            "schema": {
+              "type": "integer",
+              "default": 10,
+              "minimum": 1,
+              "maximum": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "检索成功",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "total": {
+                      "type": "integer",
+                      "description": "命中节点总数"
+                    },
+                    "nodes": {
+                      "type": "array",
+                      "description": "命中的决策树节点列表",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "step_id": {
+                            "type": "string",
+                            "description": "决策树步骤 ID，例：fmt_step_1a"
+                          },
+                          "product_id": {
+                            "type": "string",
+                            "description": "所属产品 ID"
+                          },
+                          "option_group": {
+                            "type": "string",
+                            "description": "选项组，例：System / Detector"
+                          },
+                          "short_description": {
+                            "type": "string",
+                            "description": "节点简述"
+                          },
+                          "raw_constraint_text": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "约束规则原文，可为 null"
+                          }
+                        }
+                      }
+                    },
+                    "rule_signals": {
+                      "type": "array",
+                      "description": "关联的规则信号",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "rule_id": {
+                            "type": "string",
+                            "description": "规则 ID"
+                          },
+                          "message": {
+                            "type": "string",
+                            "description": "规则文本"
+                          },
+                          "strength": {
+                            "type": "string",
+                            "description": "hard_block 或 advisory"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     }
-  },
-  "response": {
-    "parameters": {
-      "total": {"type": "integer", "description": "命中节点总数"},
-      "nodes": {
-        "type": "array",
-        "description": "命中的决策树节点列表",
-        "items": {
-          "step_id": {"type": "string", "description": "决策树步骤 ID，例：fmt_step_1a"},
-          "product_id": {"type": "string", "description": "所属产品 ID"},
-          "option_group": {"type": "string", "description": "选项组，例：System / Detector"},
-          "short_description": {"type": "string", "description": "节点简述"},
-          "raw_constraint_text": {"type": "string", "description": "约束规则原文，可为 null"}
-        }
-      },
-      "rule_signals": {
-        "type": "array",
-        "description": "关联的规则信号",
-        "items": {
-          "rule_id": {"type": "string", "description": "规则 ID"},
-          "message": {"type": "string", "description": "规则文本"},
-          "strength": {"type": "string", "description": "hard_block 或 advisory"}
-        }
-      }
-    }
-  },
-  "agent_parameter_guidance": "query（必填，取自用户需求关键词）、product_id、option_group、limit（选填）"
+  }
 }

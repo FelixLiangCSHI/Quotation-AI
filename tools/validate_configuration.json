@@ -1,58 +1,147 @@
 {
-  "name": "validate_configuration",
-  "type": "HTTP",
-  "method": "POST",
-  "description": "每选定一步参数后必须调用本工具做确定性兼容校验；兼容/不兼容结论一律以本工具返回为准，Agent 不得自行判断。",
-  "api": {
-    "name": "配置规则校验",
-    "path": "/api/v1/configuration/validate",
-    "method": "POST",
-    "description": "对候选配置做确定性规则校验：区域限制、系统组合兼容、探测器/滤线栅支持、发生器/球管规格（封装 rule_engine.check_configuration）。"
+  "openapi": "3.0.1",
+  "info": {
+    "title": "validate_configuration",
+    "description": "每选定一步参数后必须调用本工具做确定性兼容校验；兼容/不兼容结论一律以本工具返回为准，Agent 不得自行判断。",
+    "version": "1.0.0"
   },
-  "request": {
-    "location": "body",
-    "contentType": "application/json",
-    "parameters": {
-      "product_ids": {
-        "type": "array",
-        "items": {"type": "string"},
-        "required": true,
-        "description": "待校验的产品 ID 列表",
-        "example": ["DEMO-FMT-100"]
-      },
-      "region": {"type": "string", "required": false, "description": "地区；传了 product_ids 未传 region 会记入 missing_fields"},
-      "system_family": {"type": "string", "required": false, "description": "系统家族，例：FMT"},
-      "acquisition_type": {"type": "string", "required": false, "description": "采集类型"},
-      "tube_stand_id": {"type": "string", "required": false, "description": "球管支架 ID"},
-      "wallstand_id": {"type": "string", "required": false, "description": "胸片架 ID"},
-      "table_id": {"type": "string", "required": false, "description": "摄影床 ID"},
-      "grid_id": {"type": "string", "required": false, "description": "滤线栅 ID"},
-      "grid_position": {"type": "string", "required": false, "description": "滤线栅位置"},
-      "detector_type": {"type": "string", "required": false, "description": "探测器类型"},
-      "generator": {"type": "string", "required": false, "description": "高压发生器"},
-      "tube_spec": {"type": "string", "required": false, "description": "球管规格"},
-      "spec_category": {"type": "string", "required": false, "description": "规格类别"}
+  "servers": [
+    {
+      "url": "http://localhost:8000",
+      "description": "Quotation Bot API 服务地址（导入后请替换为实际部署地址）"
     }
-  },
-  "response": {
-    "parameters": {
-      "passed": {"type": "boolean", "description": "是否无阻断性问题（无 severity=error）"},
-      "issues": {
-        "type": "array",
-        "items": {
-          "severity": {"type": "string", "description": "error（阻断）或 warning（提示）"},
-          "code": {"type": "string", "description": "问题码，例：unknown_product / region_restriction"},
-          "message": {"type": "string", "description": "规则原文/说明"},
-          "product_id": {"type": "string", "description": "涉及的产品 ID，可为 null"},
-          "rule_id": {"type": "string", "description": "触发的规则 ID，可为 null"}
+  ],
+  "paths": {
+    "/api/v1/configuration/validate": {
+      "post": {
+        "operationId": "validate_configuration",
+        "summary": "配置规则校验",
+        "description": "对候选配置做确定性规则校验：区域限制、系统组合兼容、探测器/滤线栅支持、发生器/球管规格（封装 rule_engine.check_configuration）。Agent 参数指引：product_ids + region（核心必传）；其余按当前决策树步骤按需填入（探测器步骤传 detector_type/grid_id/grid_position，发生器步骤传 generator/tube_spec/spec_category 等）。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["product_ids"],
+                "properties": {
+                  "product_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "待校验的产品 ID 列表",
+                    "example": ["DEMO-FMT-100"]
+                  },
+                  "region": {
+                    "type": "string",
+                    "description": "地区；传了 product_ids 未传 region 会记入 missing_fields"
+                  },
+                  "system_family": {
+                    "type": "string",
+                    "description": "系统家族，例：FMT"
+                  },
+                  "acquisition_type": {
+                    "type": "string",
+                    "description": "采集类型"
+                  },
+                  "tube_stand_id": {
+                    "type": "string",
+                    "description": "球管支架 ID"
+                  },
+                  "wallstand_id": {
+                    "type": "string",
+                    "description": "胸片架 ID"
+                  },
+                  "table_id": {
+                    "type": "string",
+                    "description": "摄影床 ID"
+                  },
+                  "grid_id": {
+                    "type": "string",
+                    "description": "滤线栅 ID"
+                  },
+                  "grid_position": {
+                    "type": "string",
+                    "description": "滤线栅位置"
+                  },
+                  "detector_type": {
+                    "type": "string",
+                    "description": "探测器类型"
+                  },
+                  "generator": {
+                    "type": "string",
+                    "description": "高压发生器"
+                  },
+                  "tube_spec": {
+                    "type": "string",
+                    "description": "球管规格"
+                  },
+                  "spec_category": {
+                    "type": "string",
+                    "description": "规格类别"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "校验完成",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "passed": {
+                      "type": "boolean",
+                      "description": "是否无阻断性问题（无 severity=error）"
+                    },
+                    "issues": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "severity": {
+                            "type": "string",
+                            "description": "error（阻断）或 warning（提示）"
+                          },
+                          "code": {
+                            "type": "string",
+                            "description": "问题码，例：unknown_product / region_restriction"
+                          },
+                          "message": {
+                            "type": "string",
+                            "description": "规则原文/说明"
+                          },
+                          "product_id": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "涉及的产品 ID，可为 null"
+                          },
+                          "rule_id": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "触发的规则 ID，可为 null"
+                          }
+                        }
+                      }
+                    },
+                    "missing_fields": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "校验所缺的必要字段，例：[\"region\"]"
+                    }
+                  }
+                }
+              }
+            }
+          }
         }
-      },
-      "missing_fields": {
-        "type": "array",
-        "items": {"type": "string"},
-        "description": "校验所缺的必要字段，例：[\"region\"]"
       }
     }
-  },
-  "agent_parameter_guidance": "product_ids + region（核心必传）；其余按当前决策树步骤按需填入（探测器步骤传 detector_type/grid_id/grid_position，发生器步骤传 generator/tube_spec/spec_category 等）"
+  }
 }
