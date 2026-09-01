@@ -1,0 +1,397 @@
+# Dify Chatflow DSL — Agent 1: Requirement Extraction
+#
+# Import via Dify Studio -> Create App -> Import DSL File.
+# After importing:
+#   1. Select a model in each of the three LLM nodes (provider/name are left
+#      blank on purpose). Use temperature 0.1 for the extraction node.
+#   2. Verify the node wiring if your Dify version reports schema differences:
+#      Start -> LLM Extract -> Code Merge -> Assign Variables -> If/Else
+#      -> (Confirm / Ask / Done) answers.
+#
+# Field definitions and validation rules mirror app/requirement_fields.py so
+# that the Dify flow and the in-repo Agent 1 share the same vocabulary:
+# allowed currencies/incoterms, quantity 1-999, and the 0.7 confidence
+# confirmation threshold. LLM nodes only interpret and phrase text; all
+# deterministic merging/validation happens in the code node.
+
+app:
+  description: 'Agent 1: 报价需求抽取 - 多轮对话收集报价要素'
+  icon: 🤖
+  icon_background: '#EFF1F5'
+  mode: advanced-chat
+  name: Quotation - Agent1 需求抽取
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables:
+  - id: collected-fields-var
+    name: collected_fields
+    value: '{}'
+    value_type: string
+    description: 已确认字段(JSON)
+  - id: pending-candidates-var
+    name: pending_candidates
+    value: '{}'
+    value_type: string
+    description: 待确认候选值(JSON)
+  - id: missing-fields-var
+    name: missing_fields
+    value: '[]'
+    value_type: string
+    description: 缺失字段列表(JSON)
+  environment_variables: []
+  features:
+    opening_statement: 您好,我是报价需求助手。请告诉我客户的需求,例如:"华东区某医院需要2台DRX移动DR,人民币报价,DAP到上海。"我会逐步与您确认所有报价要素。
+    suggested_questions: []
+    suggested_questions_after_answer:
+      enabled: true
+    text_to_speech:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    file_upload:
+      enabled: false
+  graph:
+    edges:
+    - id: e-start-extract
+      source: start
+      target: llm-extract
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+    - id: e-extract-merge
+      source: llm-extract
+      target: code-merge
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+    - id: e-merge-assign
+      source: code-merge
+      target: assign-vars
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+    - id: e-assign-if
+      source: assign-vars
+      target: if-branch
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+    - id: e-if-confirm
+      source: if-branch
+      target: llm-confirm
+      sourceHandle: 'case-pending'
+      targetHandle: target
+      type: custom
+    - id: e-if-ask
+      source: if-branch
+      target: llm-ask
+      sourceHandle: 'case-missing'
+      targetHandle: target
+      type: custom
+    - id: e-if-done
+      source: if-branch
+      target: answer-done
+      sourceHandle: 'false'
+      targetHandle: target
+      type: custom
+    - id: e-confirm-answer
+      source: llm-confirm
+      target: answer-confirm
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+    - id: e-ask-answer
+      source: llm-ask
+      target: answer-ask
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+    nodes:
+    - id: start
+      data:
+        title: 开始
+        type: start
+        variables: []
+      position:
+        x: 50
+        y: 300
+    - id: llm-extract
+      data:
+        title: LLM 需求抽取
+        type: llm
+        model:
+          provider: ''
+          name: ''
+          mode: chat
+          completion_params:
+            temperature: 0.1
+        prompt_template:
+        - role: system
+          text: |
+            你是医疗设备报价系统的需求抽取器。你的唯一任务是从销售人员的最新消息中抽取报价需求字段,输出 JSON。你绝不回答问题、绝不推荐产品、绝不给出价格。
+
+            可抽取字段(只允许以下字段,其他一律忽略):
+            - customer_name: 客户名称(文本)
+            - region: 销售区域(文本)
+            - product_query: 产品/系统需求描述(文本)
+            - quantity: 数量(1-999 的整数)
+            - currency: 币种,只能是 USD, EUR, CNY, SGD, JPY, GBP, AUD, HKD(RMB→CNY, US$→USD, €→EUR)
+            - incoterm: 贸易条款,只能是 EXW, FCA, FOB, CIF, CIP, DAP, DDP
+            - delivery_location: 交货地点(文本)
+            - intended_use: 临床/使用用途(文本)
+            - budget_notes: 预算说明(文本)
+            - requested_accessories: 客户要求的配件(字符串数组)
+            - requested_services: 客户要求的服务(字符串数组)
+            - constraints: 其他约束(字符串数组)
+
+            已确认的字段(不要重复输出,除非用户明确更正):
+            {{#conversation.collected_fields#}}
+
+            等待确认的候选值(如果用户本轮是在确认或否认这些值,请在 confirmations 中反映):
+            {{#conversation.pending_candidates#}}
+
+            输出格式(严格 JSON,不要输出任何其他文字):
+            {"candidates":[{"field":"字段名","value":"抽取值","confidence":0.0,"evidence":"原文依据"}],"corrections":["用户明确更正的字段名"],"confirmations":{"字段名":true}}
+
+            规则:
+            1. 只抽取用户明确说出的信息,绝不猜测。没有提到的字段不要出现在 candidates 中。
+            2. confidence:明确直接陈述=0.9以上;轻微推断=0.5-0.7;模糊提及=0.5以下。
+            3. 用户表示更正("不对/改成/其实是")时,输出新值并把字段名放入 corrections。
+            4. 币种和贸易条款必须归一化为允许值,无法归一化就不要输出该字段。
+        - role: user
+          text: '{{#sys.query#}}'
+        context:
+          enabled: false
+        vision:
+          enabled: false
+      position:
+        x: 350
+        y: 300
+    - id: code-merge
+      data:
+        title: 合并与校验
+        type: code
+        code_language: python3
+        variables:
+        - variable: extraction
+          value_selector: [llm-extract, text]
+        - variable: collected
+          value_selector: [conversation, collected_fields]
+        - variable: pending
+          value_selector: [conversation, pending_candidates]
+        code: |
+          import json, re
+
+          REQUIRED = ["customer_name", "region", "product_query", "quantity",
+                      "currency", "incoterm", "delivery_location"]
+          CURRENCIES = {"USD","EUR","CNY","SGD","JPY","GBP","AUD","HKD"}
+          ALIASES = {"RMB":"CNY","US$":"USD","USD$":"USD","€":"EUR"}
+          INCOTERMS = {"EXW","FCA","FOB","CIF","CIP","DAP","DDP"}
+          THRESHOLD = 0.7
+
+          def main(extraction: str, collected: str, pending: str) -> dict:
+              m = re.search(r"\{.*\}", extraction, re.S)
+              try:
+                  data = json.loads(m.group(0)) if m else {}
+              except Exception:
+                  data = {}
+              try:
+                  coll = json.loads(collected) if collected else {}
+              except Exception:
+                  coll = {}
+              try:
+                  pend = json.loads(pending) if pending else {}
+              except Exception:
+                  pend = {}
+
+              for field, ok in (data.get("confirmations") or {}).items():
+                  if field in pend:
+                      if ok:
+                          coll[field] = pend[field]
+                      pend.pop(field, None)
+
+              for c in data.get("candidates", []):
+                  f = c.get("field")
+                  v = c.get("value")
+                  try:
+                      conf = float(c.get("confidence", 0))
+                  except Exception:
+                      conf = 0.0
+                  if f == "currency":
+                      v = ALIASES.get(str(v).upper(), str(v).upper())
+                      if v not in CURRENCIES:
+                          continue
+                  if f == "incoterm":
+                      v = str(v).upper()
+                      if v not in INCOTERMS:
+                          continue
+                  if f == "quantity":
+                      try:
+                          v = int(v)
+                      except Exception:
+                          continue
+                      if not (1 <= v <= 999):
+                          continue
+                  is_corr = f in (data.get("corrections") or [])
+                  if f in coll and not is_corr:
+                      continue
+                  if conf >= THRESHOLD or is_corr:
+                      coll[f] = v
+                      pend.pop(f, None)
+                  else:
+                      pend[f] = v
+
+              missing = [f for f in REQUIRED if f not in coll]
+              return {
+                  "collected": json.dumps(coll, ensure_ascii=False),
+                  "pending": json.dumps(pend, ensure_ascii=False),
+                  "missing": json.dumps(missing, ensure_ascii=False),
+                  "has_pending": 1 if pend else 0,
+                  "has_missing": 1 if missing else 0,
+              }
+        outputs:
+          collected:
+            type: string
+          pending:
+            type: string
+          missing:
+            type: string
+          has_pending:
+            type: number
+          has_missing:
+            type: number
+      position:
+        x: 650
+        y: 300
+    - id: assign-vars
+      data:
+        title: 更新会话变量
+        type: assigner
+        items:
+        - variable_selector: [conversation, collected_fields]
+          input_type: variable
+          operation: over-write
+          value: [code-merge, collected]
+        - variable_selector: [conversation, pending_candidates]
+          input_type: variable
+          operation: over-write
+          value: [code-merge, pending]
+        - variable_selector: [conversation, missing_fields]
+          input_type: variable
+          operation: over-write
+          value: [code-merge, missing]
+      position:
+        x: 950
+        y: 300
+    - id: if-branch
+      data:
+        title: 状态分支
+        type: if-else
+        cases:
+        - case_id: case-pending
+          logical_operator: and
+          conditions:
+          - comparison_operator: '='
+            variable_selector: [code-merge, has_pending]
+            value: '1'
+        - case_id: case-missing
+          logical_operator: and
+          conditions:
+          - comparison_operator: '='
+            variable_selector: [code-merge, has_missing]
+            value: '1'
+      position:
+        x: 1250
+        y: 300
+    - id: llm-confirm
+      data:
+        title: 生成确认话术
+        type: llm
+        model:
+          provider: ''
+          name: ''
+          mode: chat
+          completion_params:
+            temperature: 0.3
+        prompt_template:
+        - role: system
+          text: |
+            你是报价助手。以下候选信息置信度不高,需要向销售确认。请用一句简洁友好的中文列出这些值并请对方确认或纠正,不要添加其他内容。
+            待确认:{{#code-merge.pending#}}
+            已确认(仅作上下文,不必复述):{{#code-merge.collected#}}
+        context:
+          enabled: false
+        vision:
+          enabled: false
+      position:
+        x: 1550
+        y: 100
+    - id: answer-confirm
+      data:
+        title: 回复-确认
+        type: answer
+        answer: '{{#llm-confirm.text#}}'
+      position:
+        x: 1850
+        y: 100
+    - id: llm-ask
+      data:
+        title: 生成追问话术
+        type: llm
+        model:
+          provider: ''
+          name: ''
+          mode: chat
+          completion_params:
+            temperature: 0.3
+        prompt_template:
+        - role: system
+          text: |
+            你是报价助手。请针对缺失字段生成一句自然的中文追问(一次最多问2个字段,按下面顺序优先)。只输出追问本身。
+            缺失字段:{{#code-merge.missing#}}
+            字段对应问题:
+            - customer_name: 客户名称是?
+            - region: 这份报价属于哪个销售区域?
+            - product_query: 需要配置什么产品或系统?
+            - quantity: 需要的数量是?
+            - currency: 报价使用哪种币种(USD/EUR/CNY/SGD/JPY/GBP/AUD/HKD)?
+            - incoterm: 适用哪个贸易条款(EXW/FCA/FOB/CIF/CIP/DAP/DDP)?
+            - delivery_location: 交货地点是?
+            已收集信息:{{#code-merge.collected#}}
+        context:
+          enabled: false
+        vision:
+          enabled: false
+      position:
+        x: 1550
+        y: 300
+    - id: answer-ask
+      data:
+        title: 回复-追问
+        type: answer
+        answer: '{{#llm-ask.text#}}'
+      position:
+        x: 1850
+        y: 300
+    - id: answer-done
+      data:
+        title: 回复-完成
+        type: answer
+        answer: |
+          ✅ 需求信息已收集完整:
+
+          {{#code-merge.collected#}}
+
+          如需修改任何字段,直接告诉我即可(例如"数量改成3台")。确认无误后即可进入下一步产品配置。
+      position:
+        x: 1550
+        y: 500
+  viewport:
+    x: 0
+    y: 0
+    zoom: 0.7
